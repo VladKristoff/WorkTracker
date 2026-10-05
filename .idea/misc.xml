@@ -3,5 +3,5 @@
   <component name="Black">
     <option name="sdkName" value="Python 3.14 (WorkTracer)" />
   </component>
-  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.14 (WorkTracer)" project-jdk-type="Python SDK" />
+  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.14 (WorkTracking)" project-jdk-type="Python SDK" />
 </project>

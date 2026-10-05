@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/WorkTracer.iml" filepath="$PROJECT_DIR$/.idea/WorkTracer.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/WorkTracking.iml" filepath="$PROJECT_DIR$/.idea/WorkTracking.iml" />
     </modules>
   </component>
 </project>

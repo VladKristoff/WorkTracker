@@ -19,7 +19,13 @@ class MainMenu:
 
         self.logo_img = ImageTk.PhotoImage(resized_img)
 
-        logo = canvas.create_image(0, 0, anchor=NW, image=self.logo_img)
+        canvas.create_image(0, 0, anchor=NW, image=self.logo_img)
 
-        ttk.Label(self.main_frame, text="Work Tracer", style="BigBlueLabel.TLabel").pack(side="top")
+        ttk.Label(self.main_frame, text="Work Tracking", style="BigBlueLabel.TLabel").pack(side="top")
+
+        groups_btn = ttk.Button(self.main_frame, text="Группы", style="BlueButton.TButton")
+        groups_btn.pack(pady=(85, 0))
+
+        works_btn = ttk.Button(self.main_frame, text="Работы", style="BlueButton.TButton")
+        works_btn.pack(pady=25)
 
