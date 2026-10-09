@@ -5,11 +5,11 @@ from styles import set_styles
 class AppWorkTracer:
     def __init__(self, root):
         self.root = root
-        self.root.title("Work Tracer")
-        self.root.geometry("1600x900")
+        self.root.title("Work Tracking")
+        self.root.geometry("1440x800")
         self.root.resizable(False, False)
 
-        self.icon = PhotoImage(file='images/clue.png')
+        self.icon = PhotoImage(file='images/app_ico.png')
         self.header_logo = None
         root.iconphoto(True, self.icon)
 
