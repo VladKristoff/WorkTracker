@@ -1,6 +1,8 @@
 from tkinter import *
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
+from utils.parser import UniversityParser
+
 
 class MainMenu:
     def __init__(self, main_frame, app):
@@ -30,12 +32,25 @@ class MainMenu:
                                 style="BlueButton.TButton")
         upload_btn.pack(pady=100)
 
-        Label(self.main_frame, background="white", text="Для начала работы загрузите файл с данными успеваемости. Поддерживаемый формат: .xlsx").pack(side="bottom")
+        Label(self.main_frame, background="white",
+              text="Для начала работы загрузите файл с данными успеваемости. Поддерживаемый формат: .xlsx").pack(
+            side="bottom")
 
     def open_analytics_page(self):
-        file_path = filedialog.askopenfilename(title="Выберите файл")
+        file_path = filedialog.askopenfilename(title="Выберите файл", filetypes=[("Excel файлы", "*.xlsx")])
         if file_path:
-            self.app.show_window("groups_page", file_path)
+            try:
+                parser = UniversityParser(excel_file=file_path, db_file="university.db")
+                result = parser.parse()
+                print(result)
 
+                self.app.show_window("students_page", file_path)
+
+
+            except Exception as e:
+                print("Ошибка в запуске файла")
+                return
+        else:
+            return
 
 

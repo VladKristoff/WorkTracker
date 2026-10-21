@@ -22,7 +22,6 @@ class AppWorkTracer:
 
         self.current_window = None
 
-
     def register_page(self, name, page_class):
         self.pages[name] = page_class
 
