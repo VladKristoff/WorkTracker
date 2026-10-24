@@ -39,7 +39,6 @@ def set_styles(root):
     style.map("Treeview.Heading",
               background=[('active', '#D1FAE5')])  # Мятный чуть темнее при наведении
 
-    # --- ВАШИ СУЩЕСТВУЮЩИЕ СТИЛИ (С акцентными цветами) ---
     style.configure("BigLabel.TLabel",
                     foreground=accent_color,  # Надпись теперь акцентная
                     font=("Arial Rounded MT Bold", 48),
@@ -89,3 +88,7 @@ def set_styles(root):
               foreground=[("active", text_color), ("pressed", "#FFFFFF")],
               relief=[("pressed", "flat")]
               )
+
+    style.configure("SmallLabel.TLabel",
+                    background="#FFFFFF",
+                    font=("Inter", 12, "bold"))
