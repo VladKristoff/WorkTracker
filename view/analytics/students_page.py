@@ -1,279 +1,294 @@
-from tkinter import *
+import csv
+import os
+import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-from PIL import Image, ImageTk
-from database.database_manager import db_connection
+
+from config import FONT_FAMILY, LOW_SCORE_THRESHOLD, HIGH_ABSENCES_THRESHOLD
+from database import repository
+from utils.dates import iso_to_display, display_to_iso
+
+
+def fmt_number(value, empty="—"):
+    """7.5 -> '7.5', 8.0 -> '8', None -> '—'."""
+    return empty if value is None else f"{value:g}"
 
 
 class StudentsPage:
+    SEARCH_DELAY_MS = 250  # задержка перед поиском, чтобы не запрашивать БД на каждую букву
+
+    # столбец таблицы -> столбец БД
+    SORTABLE = {"fio": "fio", "score": "itog_ball", "absences": "kol_propuskov"}
+    HEADINGS = {"id": "№", "fio": "ФИО", "score": "Итоговый балл", "absences": "Количество пропусков"}
+
     def __init__(self, main_frame, app, filepath):
         self.main_frame = main_frame
         self.app = app
         self.filepath = filepath
-        self.search_var = StringVar()
-        self.sort_var = StringVar(value="Без сортировки")
+
+        self.search_var = tk.StringVar()
+        self.sort_var = tk.StringVar(value="Без сортировки")
+        self.sort_column = None   # столбец БД
+        self.sort_dir = "ASC"
+        self.current_rows = []
+        self._search_job = None
 
         self.create_widgets()
+        self.refresh_table()
+
+    # ------------------------------------------------------------------
+    # Построение интерфейса
+    # ------------------------------------------------------------------
 
     def create_widgets(self):
         header_frame = ttk.Frame(self.main_frame, style="Header.TFrame")
         header_frame.pack(fill="x", side="top")
 
-        back_btn = ttk.Button(header_frame, text="🡸", cursor='hand2', style="ArrowButton.TButton",
-                              command=self.back_to_main_menu)
-        back_btn.pack(pady=10, padx=15, anchor="w", side="left")
+        ttk.Button(header_frame, text="🡸", cursor="hand2", style="ArrowButton.TButton",
+                   command=self.back_to_main_menu).pack(pady=10, padx=15, anchor="w", side="left")
+
+        ttk.Label(self.main_frame, text=self.filepath, style="Hint.TLabel").pack(side="bottom", pady=8)
 
         content_frame = ttk.Frame(self.main_frame)
         content_frame.pack(fill="both", expand=True, padx=15, pady=15)
 
-        # --- ЛЕВАЯ ПАНЕЛЬ (left_panel) ---
-        left_panel = ttk.Frame(content_frame)
-        left_panel.pack(side="left", fill="y", padx=(0, 15), pady=0, anchor="n")
+        self._build_left_panel(content_frame)
+        self._build_table(content_frame)
 
-        # Блок поиска
-        ttk.Label(left_panel, text="Поиск:", style="SmallLabel.TLabel").pack(padx=5, pady=5, fill="x")
+    def _build_left_panel(self, parent):
+        panel = ttk.Frame(parent, width=280)
+        panel.pack(side="left", fill="y", padx=(0, 15), anchor="n")
 
-        self.search_entry = ttk.Entry(left_panel, textvariable=self.search_var)
+        ttk.Label(panel, text="Поиск:", style="SmallLabel.TLabel").pack(padx=5, pady=5, fill="x")
+        self.search_entry = ttk.Entry(panel, textvariable=self.search_var)
         self.search_entry.pack(padx=5, pady=5, fill="x")
+        self.search_var.trace_add("write", self.on_search_changed)
 
-        self.search_var.trace_add("write", self.get_filter_students)
-
-        # Блок сортировки
-        ttk.Label(left_panel, text="Сортировка:", style="SmallLabel.TLabel").pack(padx=5, pady=(15, 5), fill="x")
-
-        self.sort_combobox = ttk.Combobox(
-            left_panel,
-            textvariable=self.sort_var,
-            state="readonly",
-            values=[
-                "Без сортировки",
-                "Баллы (по возрастанию)",
-                "Баллы (по убыванию)",
-                "Пропуски (по возрастанию)",
-                "Пропуски (по убыванию)"
-            ]
-        )
-        self.sort_combobox.pack(padx=5, pady=5, fill="x")
-        self.sort_combobox.bind("<<ComboboxSelected>>", self.get_filter_students)
-
-        # Информационный блок (общее число студентов, средний балл и пропуски)
-        info_frame = ttk.LabelFrame(left_panel, text="Информация", padding=10)
-        info_frame.pack(padx=5, pady=(20, 5), fill="x")
-
-        self.total_students_label = ttk.Label(info_frame, text="Всего студентов: 0", font=("Inter", 10))
+        info = ttk.LabelFrame(panel, text="Общая информация", padding=10)
+        info.pack(padx=5, pady=(20, 5), fill="x")
+        self.total_students_label = ttk.Label(info, text="Всего студентов: 0")
         self.total_students_label.pack(anchor="w", pady=2)
-
-        self.avg_score_label = ttk.Label(info_frame, text="Средний балл: 0", font=("Inter", 10))
+        self.shown_label = ttk.Label(info, text="Показано: 0")
+        self.shown_label.pack(anchor="w", pady=2)
+        self.avg_score_label = ttk.Label(info, text="Средний балл: —")
         self.avg_score_label.pack(anchor="w", pady=2)
-
-        self.avg_absences_label = ttk.Label(info_frame, text="Среднее пропусков: 0", font=("Inter", 10))
+        self.avg_absences_label = ttk.Label(info, text="Среднее пропусков: —")
         self.avg_absences_label.pack(anchor="w", pady=2)
 
-        # Кнопка «Подробнее»
-        self.moreinfo_btn = ttk.Button(left_panel, text="Подробнее", cursor='hand2', style="MainButton.TButton",
-                                       state=DISABLED, command=self.open_student_window)
-        self.moreinfo_btn.pack(pady=(30, 0), padx=5, fill="x")
+        legend = ttk.LabelFrame(panel, text="Подсветка", padding=10)
+        legend.pack(padx=5, pady=(10, 5), fill="x")
+        for color, text in (("#FEE2E2", f"балл ниже {fmt_number(LOW_SCORE_THRESHOLD)}"),
+                            ("#FEF3C7", f"пропусков больше {HIGH_ABSENCES_THRESHOLD}")):
+            row = ttk.Frame(legend)
+            row.pack(anchor="w", pady=2)
+            tk.Label(row, background=color, width=2, relief="flat").pack(side="left", padx=(0, 8))
+            ttk.Label(row, text=text, style="Hint.TLabel").pack(side="left")
 
-        # --- ТАБЛИЦА СТУДЕНТОВ ---
+        self.moreinfo_btn = ttk.Button(panel, text="Подробнее", cursor="hand2",
+                                       style="MainButton.TButton", state=tk.DISABLED,
+                                       command=self.open_student_window)
+        self.moreinfo_btn.pack(pady=(25, 0), padx=5, fill="x")
+
+    def _build_table(self, parent):
+        table_frame = ttk.Frame(parent)
+        table_frame.pack(side="right", fill="both", expand=True)
+
         columns = ("id", "fio", "score", "absences")
-        self.student_table = ttk.Treeview(content_frame, columns=columns, show="headings")
+        self.student_table = ttk.Treeview(table_frame, columns=columns, show="headings",
+                                          selectmode="browse")
+        scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=self.student_table.yview)
+        self.student_table.configure(yscrollcommand=scrollbar.set)
 
-        self.student_table.heading("id", text="id")
-        self.student_table.heading("fio", text="ФИО")
-        self.student_table.heading("score", text="Итоговый балл")
-        self.student_table.heading("absences", text="Количество пропусков")
+        widths = {"id": (50, "w"), "fio": (300, "w"), "score": (140, "center"), "absences": (200, "center")}
+        for col in columns:
+            self.student_table.heading(col, text=self.HEADINGS[col])
+            if col in self.SORTABLE:
+                # команду задаём отдельно: command=None в новых версиях Python вызывает TclError
+                self.student_table.heading(col, command=lambda c=col: self.on_heading_click(c))
+            self.student_table.column(col, width=widths[col][0], anchor=widths[col][1])
 
-        self.student_table.column("id", width=40, anchor="w")
-        self.student_table.column("fio", width=300, anchor="w")
-        self.student_table.column("score", width=130, anchor="center")
-        self.student_table.column("absences", width=180, anchor="center")
+        self.student_table.tag_configure("low_score", background="#FEE2E2")
+        self.student_table.tag_configure("many_absences", background="#FEF3C7")
 
-        self.student_table.pack(side="right", fill="both", expand=True, padx=0, pady=0)
+        scrollbar.pack(side="right", fill="y")
+        self.student_table.pack(side="left", fill="both", expand=True)
 
         self.student_table.bind("<Double-1>", self.open_student_window)
+        self.student_table.bind("<Return>", self.open_student_window)
         self.student_table.bind("<<TreeviewSelect>>", self.on_table_select)
 
-        ttk.Label(self.main_frame, text=f"{self.filepath}", font=("Inter", 9), foreground="#8E8E93").pack(side="bottom",
-                                                                                                          pady=10)
+    # ------------------------------------------------------------------
+    # Поиск, сортировка, таблица
+    # ------------------------------------------------------------------
 
-        self.get_filter_students()
+    def on_search_changed(self, *_):
+        if self._search_job:
+            self.main_frame.after_cancel(self._search_job)
+        self._search_job = self.main_frame.after(self.SEARCH_DELAY_MS, self.refresh_table)
 
-    def back_to_main_menu(self):
-        isTrue = messagebox.askyesno("Внимание!", "Вы уверены, что хотите выйти в главное меню?")
-        if isTrue:
-            self.app.show_window("main_menu")
+    def on_sort_selected(self, _event=None):
+        option = repository.SORT_OPTIONS.get(self.sort_var.get())
+        self.sort_column, self.sort_dir = option if option else (None, "ASC")
+        self.refresh_table()
+
+    def on_heading_click(self, table_column):
+        db_column = self.SORTABLE[table_column]
+        if self.sort_column == db_column:
+            self.sort_dir = "DESC" if self.sort_dir == "ASC" else "ASC"
         else:
+            self.sort_column, self.sort_dir = db_column, "ASC"
+        self.sort_var.set("Без сортировки")  # сортировка теперь задаётся заголовком
+        self.refresh_table()
+
+    def _update_heading_arrows(self):
+        for table_column, db_column in self.SORTABLE.items():
+            arrow = ""
+            if self.sort_column == db_column:
+                arrow = " ▲" if self.sort_dir == "ASC" else " ▼"
+            self.student_table.heading(table_column, text=self.HEADINGS[table_column] + arrow)
+
+    def refresh_table(self, *_):
+        self._search_job = None
+        try:
+            rows = repository.get_students(self.search_var.get(), self.sort_var.get(),
+                                           self.sort_column, self.sort_dir)
+            stats = repository.get_stats()
+        except Exception as e:
+            messagebox.showerror("Ошибка базы данных", f"Не удалось получить данные:\n{e}")
             return
 
-    def on_table_select(self, event):
-        """Активирует кнопку 'Подробнее' при выборе строки в таблице"""
+        self.current_rows = rows
+        self.student_table.delete(*self.student_table.get_children())
+        for row in rows:
+            tags = []
+            if row["itog_ball"] is not None and row["itog_ball"] < LOW_SCORE_THRESHOLD:
+                tags.append("low_score")
+            if row["kol_propuskov"] is not None and row["kol_propuskov"] > HIGH_ABSENCES_THRESHOLD:
+                tags.append("many_absences")
+            self.student_table.insert(
+                "", "end", iid=str(row["id"]), tags=tags,
+                values=(row["id"], row["fio"], fmt_number(row["itog_ball"]),
+                        fmt_number(row["kol_propuskov"])))
+
+        self._update_heading_arrows()
+        self.on_table_select()
+
+        self.total_students_label.config(text=f"Всего студентов: {stats.total}")
+        self.shown_label.config(text=f"Показано: {len(rows)}")
+        self.avg_score_label.config(text=f"Средний балл: {fmt_number(round(stats.avg_score, 2) if stats.avg_score is not None else None)}")
+        self.avg_absences_label.config(text=f"Среднее пропусков: {fmt_number(round(stats.avg_absences, 2) if stats.avg_absences is not None else None)}")
+
+    def on_table_select(self, _event=None):
+        state = tk.NORMAL if self.student_table.selection() else tk.DISABLED
+        self.moreinfo_btn.config(state=state)
+
+    # ------------------------------------------------------------------
+    # Действия
+    # ------------------------------------------------------------------
+
+    def back_to_main_menu(self):
+        if messagebox.askyesno("Внимание!", "Вы уверены, что хотите выйти в главное меню?"):
+            self.app.show_window("main_menu")
+
+    def open_student_window(self, _event=None):
         selection = self.student_table.selection()
         if selection:
-            self.moreinfo_btn.config(state=NORMAL)
-        else:
-            self.moreinfo_btn.config(state=DISABLED)
+            self.create_moreinfo_window(int(selection[0]))
 
-    def get_filter_students(self, *args):
-        search_query = self.search_var.get().strip()
-        sort_option = self.sort_var.get()
+    # ------------------------------------------------------------------
+    # Окно «Подробнее»
+    # ------------------------------------------------------------------
 
-        # Очищаем текущие данные в таблице
-        for child in self.student_table.get_children():
-            self.student_table.delete(child)
+    def create_moreinfo_window(self, student_id):
+        student = repository.get_student(student_id)
+        if student is None:
+            messagebox.showerror("Ошибка", "Студент не найден в базе данных.")
+            return
 
-        conn = db_connection()
-        cursor = conn.cursor()
+        win = tk.Toplevel(self.main_frame)
+        win.title(f"Подробная информация ({student['fio']})")
+        win.geometry("900x680")
+        win.transient(self.main_frame.winfo_toplevel())
+        win.grab_set()
+        win.bind("<Escape>", lambda _e: win.destroy())
 
-        base_query = "SELECT * FROM Students"
-        params = []
-        conditions = []
+        container = ttk.Frame(win, padding=20)
+        container.pack(fill="both", expand=True)
 
-        if search_query:
-            conditions.append("fio LIKE ? COLLATE NOCASE")
-            params.append(f"%{search_query}%")
+        # --- Основная информация ---
+        rank = repository.get_rank(student_id)
+        total = repository.get_stats().total
+        info = ttk.LabelFrame(container, text="Основная информация", padding=15)
+        info.pack(fill="x", pady=(0, 10))
+        ttk.Label(info, text=f"ФИО: {student['fio']}", font=(FONT_FAMILY, 11, "bold")).pack(anchor="w", pady=2)
+        ttk.Label(info, text=f"Итоговый балл: {fmt_number(student['itog_ball'])}").pack(anchor="w", pady=2)
+        ttk.Label(info, text=f"Количество пропусков: {fmt_number(student['kol_propuskov'])}").pack(anchor="w", pady=2)
+        place = f"{rank} из {total}" if rank else "нет итогового балла"
+        ttk.Label(info, text=f"Место в группе: {place}", font=(FONT_FAMILY, 10, "bold")).pack(anchor="w", pady=5)
 
-        if conditions:
-            base_query += " WHERE " + " AND ".join(conditions)
+        # --- Дата, до которой учитываем занятия ---
+        last_date = repository.get_last_graded_date()
+        date_var = tk.StringVar(value=iso_to_display(last_date))
+        date_row = ttk.Frame(container)
+        date_row.pack(fill="x", pady=(0, 10))
+        ttk.Label(date_row, text="Учитывать занятия до:").pack(side="left")
+        date_entry = ttk.Entry(date_row, textvariable=date_var, width=12)
+        date_entry.pack(side="left", padx=8)
+        ttk.Label(date_row, text="(дд.мм.гггг; по умолчанию — дата последнего оценённого занятия)",
+                  style="Hint.TLabel").pack(side="left")
 
-        # Добавляем логику сортировки к SQL-запросу
-        if sort_option == "Баллы (по возрастанию)":
-            base_query += " ORDER BY itog_ball ASC"
-        elif sort_option == "Баллы (по убыванию)":
-            base_query += " ORDER BY itog_ball DESC"
-        elif sort_option == "Пропуски (по возрастанию)":
-            base_query += " ORDER BY kol_propuskov ASC"
-        elif sort_option == "Пропуски (по убыванию)":
-            base_query += " ORDER BY kol_propuskov DESC"
+        # --- Таблицы ---
+        lessons_frame = ttk.LabelFrame(container, text="Пропущенные занятия", padding=10)
+        lessons_frame.pack(fill="both", expand=True, pady=(0, 10))
+        lessons_table = self._build_activity_table(
+            lessons_frame, (("date", "Дата", 90, "center"), ("name", "Занятие", 90, "center"),
+                            ("topic", "Тема", 600, "w")))
 
-        cursor.execute(base_query, tuple(params))
-        items = cursor.fetchall()
+        works_frame = ttk.LabelFrame(container, text="Работы без оценки", padding=10)
+        works_frame.pack(fill="both", expand=True)
+        works_table = self._build_activity_table(
+            works_frame, (("date", "Дата", 90, "center"), ("name", "Название", 200, "w"),
+                          ("type", "Тип", 90, "center"), ("topic", "Тема", 400, "w")))
 
-        for row in items:
-            self.student_table.insert("", 'end', values=tuple(row))
-
-        # Вычисляем и обновляем статистику в информационной панели слева
-        cursor.execute("SELECT COUNT(*), AVG(itog_ball), AVG(kol_propuskov) FROM Students")
-        total_count, avg_score, avg_absences = cursor.fetchone()
-
-        if hasattr(self, 'total_students_label'):
-            self.total_students_label.config(text=f"Всего студентов: {total_count if total_count else 0}")
-            self.avg_score_label.config(text=f"Средний балл: {round(avg_score, 2) if avg_score is not None else 0}")
-            self.avg_absences_label.config(text=f"Среднее пропусков: {round(avg_absences, 2) if avg_absences is not None else 0}")
-
-        cursor.close()
-        conn.close()
-
-    def open_student_window(self, event=None):
-        selection = self.student_table.selection()
-        if selection:
-            item = self.student_table.item(selection[0])
-            student_id = item['values'][0]
-            student_name = item['values'][1]
-
-            self.create_moreinfo_window(student_id, student_name)
-
-    def create_moreinfo_window(self, student_id, student_name):
-        self.moreinfo_window = Toplevel(self.main_frame)
-        self.moreinfo_window.geometry("900x600")
-        self.moreinfo_window.title(f"Подробная информация ({student_name})")
-        self.moreinfo_window.grab_set()
-
-        main_container = ttk.Frame(self.moreinfo_window, padding="20")
-        main_container.pack(fill="both", expand=True)
-
-        conn = db_connection()
-        cursor = conn.cursor()
-
-        cursor.execute("SELECT itog_ball, kol_propuskov FROM Students WHERE id = ?", (student_id,))
-        student_data = cursor.fetchone()
-        final_score = student_data[0] if student_data else 0
-        absences = student_data[1] if student_data else 0
-
-        cursor.execute("""
-            SELECT COUNT(*) + 1 as rank 
-            FROM Students 
-            WHERE itog_ball > ? 
-            OR (itog_ball = ? AND id < ?)
-        """, (final_score, final_score, student_id))
-        rank = cursor.fetchone()[0]
-
-        cursor.execute("SELECT COUNT(*) FROM Students")
-        total_students = cursor.fetchone()[0]
-
-        info_frame = ttk.LabelFrame(main_container, text="Основная информация", padding="15")
-        info_frame.pack(fill="x", pady=(0, 15))
-
-        ttk.Label(info_frame, text=f"ФИО: {student_name}", font=("Inter", 11, "bold")).pack(anchor="w", pady=2)
-        ttk.Label(info_frame, text=f"Итоговый балл: {final_score}", font=("Inter", 10)).pack(anchor="w", pady=2)
-        ttk.Label(info_frame, text=f"Количество пропусков: {absences}", font=("Inter", 10)).pack(anchor="w", pady=2)
-        ttk.Label(info_frame, text=f"Место в группе: {rank} из {total_students}", font=("Inter", 10, "bold")).pack(
-            anchor="w", pady=5)
-
-        activities_frame = ttk.LabelFrame(main_container, text="Пропущенные занятия", padding="15")
-        activities_frame.pack(fill="both", expand=True)
-
-        cursor.execute("""
-            SELECT a.data, a.tema, a.nazvanie
-            FROM Activities a
-            LEFT JOIN Grades g
-                   ON g.activity_id = a.id AND g.student_id = ?
-            WHERE g.poluchenny_ball IS NULL
-            ORDER BY a.data
-        """, (student_id,))
-        missed_activities = cursor.fetchall()
-
-        from datetime import datetime
-        import re
-
-        current_date = datetime(2025, 10, 6)
-
-        filtered_activities = []
-        for activity in missed_activities:
-            date_str = activity[0]
-            if not date_str:
-                continue
-
-            date_str = date_str.strip()
-            parsed_date = None
-
+        def fill(_event=None):
             try:
-                parsed_date = datetime.strptime(date_str, "%Y-%m-%d")
+                up_to = display_to_iso(date_var.get())
             except ValueError:
-                pass
+                messagebox.showerror("Неверная дата", "Введите дату в формате дд.мм.гггг, "
+                                     "например 06.10.2025.", parent=win)
+                return
+            rows = repository.get_empty_activities(student_id, up_to)
+            lessons = [r for r in rows if r["tip"] in repository.LESSON_TYPES]
+            works = [r for r in rows if r["tip"] not in repository.LESSON_TYPES]
 
-            if not parsed_date:
-                first_part = date_str.split('/')[0]
-                match = re.match(r'(\d{1,2})\.(\d{1,2})', first_part)
-                if match:
-                    act_day = int(match.group(1))
-                    act_month = int(match.group(2))
-                    parsed_date = datetime(current_date.year, act_month, act_day)
+            lessons_table.delete(*lessons_table.get_children())
+            works_table.delete(*works_table.get_children())
+            for r in lessons:
+                name = f"Урок {r['nazvanie']}" if r["nazvanie"].isdigit() else r["nazvanie"]
+                lessons_table.insert("", "end", values=(iso_to_display(r["data"]), name, r["tema"] or ""))
+            for r in works:
+                works_table.insert("", "end", values=(iso_to_display(r["data"]), r["nazvanie"],
+                                                      r["tip"], r["tema"] or ""))
+            lessons_frame.config(text=f"Пропущенные занятия ({len(lessons)})")
+            works_frame.config(text=f"Работы без оценки ({len(works)})")
 
-            if parsed_date and parsed_date <= current_date:
-                filtered_activities.append(activity)
+        ttk.Button(date_row, text="Применить", style="Secondary.TButton", command=fill).pack(side="left")
+        date_entry.bind("<Return>", fill)
 
-        if filtered_activities:
-            columns = ("date", "name", "topic")
-            activities_table = ttk.Treeview(activities_frame, columns=columns, show="headings",
-                                            height=min(len(filtered_activities), 10))
+        ttk.Button(container, text="Закрыть", style="Secondary.TButton",
+                   command=win.destroy).pack(pady=(12, 0))
+        fill()
 
-            activities_table.heading("date", text="Дата")
-            activities_table.heading("name", text="Название")
-            activities_table.heading("topic", text="Тема")
-
-            activities_table.column("date", width=80, anchor="center")
-            activities_table.column("name", width=200, anchor="w")
-            activities_table.column("topic", width=400, anchor="w")
-
-            for activity in filtered_activities:
-                activities_table.insert("", "end", values=(activity[0], activity[2], activity[1]))
-
-            activities_table.pack(fill="both", expand=True)
-        else:
-            ttk.Label(activities_frame, text="Нет пропущенных занятий", font=("Inter", 10), foreground="#8E8E93").pack(
-                pady=20)
-
-        close_btn = ttk.Button(main_container, text="Закрыть", command=self.moreinfo_window.destroy)
-        close_btn.pack(pady=(15, 0))
-
-        cursor.close()
-        conn.close()
+    @staticmethod
+    def _build_activity_table(parent, columns):
+        frame = ttk.Frame(parent)
+        frame.pack(fill="both", expand=True)
+        ids = [c[0] for c in columns]
+        table = ttk.Treeview(frame, columns=ids, show="headings", height=5)
+        scroll = ttk.Scrollbar(frame, orient="vertical", command=table.yview)
+        table.configure(yscrollcommand=scroll.set)
+        for col_id, title, width, anchor in columns:
+            table.heading(col_id, text=title)
+            table.column(col_id, width=width, anchor=anchor)
+        scroll.pack(side="right", fill="y")
+        table.pack(side="left", fill="both", expand=True)
+        return table

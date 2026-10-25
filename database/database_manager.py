@@ -1,9 +1,21 @@
 import sqlite3
+from contextlib import contextmanager
 
-def db_connection():
+from config import DB_PATH
+
+
+def db_connection(db_path: str = DB_PATH) -> sqlite3.Connection:
+    """Открывает соединение с БД. Ошибки не скрываются — их обработает вызывающий код."""
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+@contextmanager
+def db_session(db_path: str = DB_PATH):
+    """Контекстный менеджер: соединение гарантированно закрывается даже при ошибке."""
+    conn = db_connection(db_path)
     try:
-        conn = sqlite3.connect("university.db")
-        return conn
-    except Exception as e:
-        print(f"Db not connect: {e}")
-        return
+        yield conn
+    finally:
+        conn.close()
