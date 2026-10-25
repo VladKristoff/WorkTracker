@@ -22,24 +22,39 @@ class MainMenu:
         self.create_widgets()
 
     def create_widgets(self):
-        canvas = tk.Canvas(self.main_frame, bg="white", height=100, width=100, bd=0,
-                           highlightthickness=0)
-        canvas.pack(pady=(120, 0))
+        p = self.app.palette
+
+        # Фон с мягкими декоративными кругами (перерисовывается при смене размера и темы)
+        self.bg_canvas = tk.Canvas(self.main_frame, bg=p["bg"], bd=0, highlightthickness=0)
+        self.bg_canvas.place(x=0, y=0, relwidth=1, relheight=1)
+        self.bg_canvas.bind("<Configure>", lambda _e: self._draw_background())
+
+        self.theme_btn = ttk.Button(self.main_frame, text=self.app.theme_icon, width=3,
+                                    style="Ghost.TButton", cursor="hand2",
+                                    command=self.app.toggle_theme)
+        self.theme_btn.place(relx=1.0, x=-20, y=16, anchor="ne")
+
+        # Центральная карточка
+        card = ttk.Frame(self.main_frame, style="Card.TFrame", padding=(64, 44))
+        card.place(relx=0.5, rely=0.5, anchor="center")
+
         try:
-            pil_img = Image.open(ICON_PATH).resize((100, 100), Image.Resampling.LANCZOS)
+            pil_img = Image.open(ICON_PATH).resize((88, 88), Image.Resampling.LANCZOS)
             self.logo_img = ImageTk.PhotoImage(pil_img)
-            canvas.create_image(0, 0, anchor=tk.NW, image=self.logo_img)
+            ttk.Label(card, image=self.logo_img, style="Card.TLabel").pack()
         except (OSError, FileNotFoundError):
             pass  # без логотипа меню остаётся рабочим
 
-        ttk.Label(self.main_frame, text="Work Tracking", style="BigLabel.TLabel").pack(side="top")
+        ttk.Label(card, text="Work Tracking", style="BigLabel.TLabel").pack(pady=(12, 0))
+        ttk.Label(card, text="Успеваемость студентов — наглядно",
+                  style="Subtitle.TLabel").pack(pady=(2, 32))
 
-        buttons = ttk.Frame(self.main_frame)
-        buttons.pack(pady=70)
+        buttons = ttk.Frame(card, style="Surface.TFrame")
+        buttons.pack()
 
         self.upload_btn = ttk.Button(buttons, text="Загрузить файл", cursor="hand2",
                                      command=self.open_analytics_page, style="BlueButton.TButton")
-        self.upload_btn.pack()
+        self.upload_btn.pack(fill="x")
 
         # Если данные уже загружались, даём продолжить без повторной загрузки xlsx
         last_file = load_settings().get("last_file")
@@ -47,16 +62,38 @@ class MainMenu:
             self.continue_btn = ttk.Button(buttons, text="Продолжить с последними данными",
                                            cursor="hand2", style="Secondary.TButton",
                                            command=lambda: self.app.show_window("students_page", last_file))
-            self.continue_btn.pack(pady=(15, 0))
+            self.continue_btn.pack(pady=(12, 0), fill="x")
             ttk.Label(buttons, text=os.path.basename(last_file),
-                      style="Hint.TLabel").pack(pady=(4, 0))
+                      style="CardHint.TLabel").pack(pady=(6, 0))
 
-        self.progress = ttk.Progressbar(self.main_frame, mode="indeterminate", length=320)
-        self.status_label = ttk.Label(self.main_frame, text="", style="Hint.TLabel")
+        # Сюда попадают индикатор и статус загрузки
+        self.status_box = ttk.Frame(card, style="Surface.TFrame")
+        self.status_box.pack(fill="x")
+        self.progress = ttk.Progressbar(self.status_box, mode="indeterminate", length=320)
+        self.status_label = ttk.Label(self.status_box, text="", style="CardHint.TLabel")
 
-        ttk.Label(self.main_frame, style="Hint.TLabel",
-                  text="Для начала работы загрузите файл с данными успеваемости. "
-                       "Поддерживаемый формат: .xlsx").pack(side="bottom", pady=15)
+        ttk.Label(card, style="CardHint.TLabel", justify="center", wraplength=380,
+                  text="Для начала работы загрузите файл с данными успеваемости.\n"
+                       "Поддерживаемый формат: .xlsx").pack(pady=(28, 0))
+
+    # ------------------------------------------------------------------
+    # Оформление
+    # ------------------------------------------------------------------
+
+    def _draw_background(self):
+        p = self.app.palette
+        c = self.bg_canvas
+        w, h = c.winfo_width(), c.winfo_height()
+        c.delete("all")
+        c.create_oval(-170, -170, 300, 300, fill=p["deco1"], outline="")
+        c.create_oval(w - 330, h - 300, w + 170, h + 200, fill=p["deco2"], outline="")
+        c.create_oval(w - 190, -90, w - 90, 10, fill=p["deco1"], outline="")
+        c.create_oval(70, h - 120, 150, h - 40, fill=p["deco2"], outline="")
+
+    def on_theme_changed(self):
+        self.bg_canvas.configure(bg=self.app.palette["bg"])
+        self._draw_background()
+        self.theme_btn.config(text=self.app.theme_icon)
 
     # ------------------------------------------------------------------
 
@@ -117,8 +154,8 @@ class MainMenu:
         if loading:
             self.upload_btn.config(state=tk.DISABLED)
             self.status_label.config(text="Обработка файла…")
-            self.status_label.pack()
-            self.progress.pack(pady=5)
+            self.status_label.pack(pady=(14, 0))
+            self.progress.pack(pady=(6, 0))
             self.progress.start(12)
         else:
             self.progress.stop()

@@ -5,12 +5,18 @@ from tkinter import ttk, messagebox, filedialog
 
 from config import FONT_FAMILY, LOW_SCORE_THRESHOLD, HIGH_ABSENCES_THRESHOLD
 from database import repository
+from styles import configure_tree_tags
 from utils.dates import iso_to_display, display_to_iso
 
 
 def fmt_number(value, empty="—"):
     """7.5 -> '7.5', 8.0 -> '8', None -> '—'."""
     return empty if value is None else f"{value:g}"
+
+
+def initials(fio):
+    parts = [w for w in fio.split() if w]
+    return "".join(w[0] for w in parts[:2]).upper() or "?"
 
 
 class StudentsPage:
@@ -31,6 +37,7 @@ class StudentsPage:
         self.sort_dir = "ASC"
         self.current_rows = []
         self._search_job = None
+        self._legend_swatches = []  # (виджет, ключ цвета в палитре, ключ цвета рамки)
 
         self.create_widgets()
         self.refresh_table()
@@ -40,81 +47,132 @@ class StudentsPage:
     # ------------------------------------------------------------------
 
     def create_widgets(self):
+        # --- Шапка ---
         header_frame = ttk.Frame(self.main_frame, style="Header.TFrame")
         header_frame.pack(fill="x", side="top")
 
-        ttk.Button(header_frame, text="🡸", cursor="hand2", style="ArrowButton.TButton",
-                   command=self.back_to_main_menu).pack(pady=10, padx=15, anchor="w", side="left")
+        ttk.Button(header_frame, text="←  Назад", cursor="hand2", style="HeaderGhost.TButton",
+                   command=self.back_to_main_menu).pack(side="left", padx=(14, 0), pady=10)
+        ttk.Label(header_frame, text="Успеваемость студентов",
+                  style="Header.TLabel").pack(side="left", padx=16)
+        self.theme_btn = ttk.Button(header_frame, text=self.app.theme_icon, width=3,
+                                    cursor="hand2", style="HeaderGhost.TButton",
+                                    command=self.app.toggle_theme)
+        self.theme_btn.pack(side="right", padx=14)
+        ttk.Frame(self.main_frame, style="Line.TFrame", height=1).pack(fill="x", side="top")
 
-        ttk.Label(self.main_frame, text=self.filepath, style="Hint.TLabel").pack(side="bottom", pady=8)
+        ttk.Label(self.main_frame, text=f"Файл: {os.path.basename(self.filepath)}",
+                  style="Hint.TLabel").pack(side="bottom", pady=8)
 
         content_frame = ttk.Frame(self.main_frame)
-        content_frame.pack(fill="both", expand=True, padx=15, pady=15)
+        content_frame.pack(fill="both", expand=True, padx=20, pady=(18, 4))
 
         self._build_left_panel(content_frame)
         self._build_table(content_frame)
 
-    def _build_left_panel(self, parent):
-        panel = ttk.Frame(parent, width=280)
-        panel.pack(side="left", fill="y", padx=(0, 15), anchor="n")
+    @staticmethod
+    def _card(parent, title, pady=(0, 14)):
+        card = ttk.Frame(parent, style="Card.TFrame", padding=16)
+        card.pack(fill="x", pady=pady)
+        ttk.Label(card, text=title, style="CardTitle.TLabel").pack(anchor="w", pady=(0, 10))
+        return card
 
-        ttk.Label(panel, text="Поиск:", style="SmallLabel.TLabel").pack(padx=5, pady=5, fill="x")
-        self.search_entry = ttk.Entry(panel, textvariable=self.search_var)
-        self.search_entry.pack(padx=5, pady=5, fill="x")
+    def _build_left_panel(self, parent):
+        panel = ttk.Frame(parent, width=290)
+        panel.pack(side="left", fill="y", padx=(0, 18), anchor="n")
+        panel.pack_propagate(False)
+
+        # --- Поиск ---
+        search = self._card(panel, "Поиск")
+        self.search_entry = ttk.Entry(search, textvariable=self.search_var)
+        self.search_entry.pack(fill="x")
         self.search_var.trace_add("write", self.on_search_changed)
 
-        info = ttk.LabelFrame(panel, text="Общая информация", padding=10)
-        info.pack(padx=5, pady=(20, 5), fill="x")
-        self.total_students_label = ttk.Label(info, text="Всего студентов: 0")
-        self.total_students_label.pack(anchor="w", pady=2)
-        self.shown_label = ttk.Label(info, text="Показано: 0")
-        self.shown_label.pack(anchor="w", pady=2)
-        self.avg_score_label = ttk.Label(info, text="Средний балл: —")
-        self.avg_score_label.pack(anchor="w", pady=2)
-        self.avg_absences_label = ttk.Label(info, text="Среднее пропусков: —")
-        self.avg_absences_label.pack(anchor="w", pady=2)
+        # --- Статистика плитками 2x2 ---
+        stats = self._card(panel, "Общая информация")
+        grid = ttk.Frame(stats, style="Surface.TFrame")
+        grid.pack(fill="x")
+        grid.columnconfigure((0, 1), weight=1, uniform="tiles")
+        self.total_students_label = self._tile(grid, 0, 0, "Всего студентов")
+        self.shown_label = self._tile(grid, 0, 1, "Показано")
+        self.avg_score_label = self._tile(grid, 1, 0, "Средний балл")
+        self.avg_absences_label = self._tile(grid, 1, 1, "Среднее пропусков")
 
-        legend = ttk.LabelFrame(panel, text="Подсветка", padding=10)
-        legend.pack(padx=5, pady=(10, 5), fill="x")
-        for color, text in (("#FEE2E2", f"балл ниже {fmt_number(LOW_SCORE_THRESHOLD)}"),
-                            ("#FEF3C7", f"пропусков больше {HIGH_ABSENCES_THRESHOLD}")):
-            row = ttk.Frame(legend)
-            row.pack(anchor="w", pady=2)
-            tk.Label(row, background=color, width=2, relief="flat").pack(side="left", padx=(0, 8))
-            ttk.Label(row, text=text, style="Hint.TLabel").pack(side="left")
+        # --- Легенда ---
+        legend = self._card(panel, "Подсветка")
+        for bg_key, fg_key, text in (
+                ("low_bg", "low_fg", f"балл ниже {fmt_number(LOW_SCORE_THRESHOLD)}"),
+                ("warn_bg", "warn_fg", f"пропусков больше {HIGH_ABSENCES_THRESHOLD}")):
+            row = ttk.Frame(legend, style="Surface.TFrame")
+            row.pack(anchor="w", pady=3)
+            swatch = tk.Frame(row, width=16, height=16, highlightthickness=1)
+            swatch.pack(side="left", padx=(0, 10))
+            self._legend_swatches.append((swatch, bg_key, fg_key))
+            ttk.Label(row, text=text, style="CardHint.TLabel").pack(side="left")
+        self._recolor_legend()
 
         self.moreinfo_btn = ttk.Button(panel, text="Подробнее", cursor="hand2",
                                        style="MainButton.TButton", state=tk.DISABLED,
                                        command=self.open_student_window)
-        self.moreinfo_btn.pack(pady=(25, 0), padx=5, fill="x")
+        self.moreinfo_btn.pack(pady=(4, 0), fill="x")
+
+    @staticmethod
+    def _tile(parent, row, col, caption):
+        tile = ttk.Frame(parent, style="Surface.TFrame")
+        tile.grid(row=row, column=col, sticky="w", pady=6)
+        value = ttk.Label(tile, text="—", style="Value.TLabel")
+        value.pack(anchor="w")
+        ttk.Label(tile, text=caption, style="CardHint.TLabel").pack(anchor="w")
+        return value
 
     def _build_table(self, parent):
-        table_frame = ttk.Frame(parent)
-        table_frame.pack(side="right", fill="both", expand=True)
+        # Карточка с рамкой; внутри таблица и тонкая полоса прокрутки
+        table_card = ttk.Frame(parent, style="Card.TFrame", padding=1)
+        table_card.pack(side="right", fill="both", expand=True)
 
         columns = ("id", "fio", "score", "absences")
-        self.student_table = ttk.Treeview(table_frame, columns=columns, show="headings",
+        self.student_table = ttk.Treeview(table_card, columns=columns, show="headings",
                                           selectmode="browse")
-        scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=self.student_table.yview)
+        scrollbar = ttk.Scrollbar(table_card, orient="vertical", command=self.student_table.yview)
         self.student_table.configure(yscrollcommand=scrollbar.set)
 
-        widths = {"id": (50, "w"), "fio": (300, "w"), "score": (140, "center"), "absences": (200, "center")}
+        # (ширина, выравнивание, растягивается ли при изменении окна)
+        layout = {"id": (60, "center", False), "fio": (300, "w", True),
+                  "score": (140, "center", False), "absences": (200, "center", False)}
         for col in columns:
-            self.student_table.heading(col, text=self.HEADINGS[col])
+            width, anchor, stretch = layout[col]
+            self.student_table.heading(col, text=self.HEADINGS[col], anchor=anchor)
             if col in self.SORTABLE:
                 # команду задаём отдельно: command=None в новых версиях Python вызывает TclError
                 self.student_table.heading(col, command=lambda c=col: self.on_heading_click(c))
-            self.student_table.column(col, width=widths[col][0], anchor=widths[col][1])
+            self.student_table.column(col, width=width, anchor=anchor, stretch=stretch)
 
-        self.student_table.tag_configure("low_score", background="#FEE2E2")
-        self.student_table.tag_configure("many_absences", background="#FEF3C7")
+        configure_tree_tags(self.student_table, self.app.palette)
 
         scrollbar.pack(side="right", fill="y")
         self.student_table.pack(side="left", fill="both", expand=True)
 
+        # Заглушка, когда поиск ничего не нашёл
+        self.empty_label = ttk.Label(table_card, text="Ничего не найдено", style="CardHint.TLabel",
+                                     font=(FONT_FAMILY, 12))
+
         self.student_table.bind("<Double-1>", self.open_student_window)
         self.student_table.bind("<Return>", self.open_student_window)
         self.student_table.bind("<<TreeviewSelect>>", self.on_table_select)
+
+    # ------------------------------------------------------------------
+    # Тема
+    # ------------------------------------------------------------------
+
+    def _recolor_legend(self):
+        p = self.app.palette
+        for swatch, bg_key, fg_key in self._legend_swatches:
+            swatch.configure(bg=p[bg_key], highlightbackground=p[fg_key])
+
+    def on_theme_changed(self):
+        configure_tree_tags(self.student_table, self.app.palette)
+        self._recolor_legend()
+        self.theme_btn.config(text=self.app.theme_icon)
 
     # ------------------------------------------------------------------
     # Поиск, сортировка, таблица
@@ -158,24 +216,31 @@ class StudentsPage:
 
         self.current_rows = rows
         self.student_table.delete(*self.student_table.get_children())
-        for row in rows:
-            tags = []
+        for index, row in enumerate(rows):
+            # Один тег на строку: подсветка проблем важнее чередования
             if row["itog_ball"] is not None and row["itog_ball"] < LOW_SCORE_THRESHOLD:
-                tags.append("low_score")
-            if row["kol_propuskov"] is not None and row["kol_propuskov"] > HIGH_ABSENCES_THRESHOLD:
-                tags.append("many_absences")
+                tag = "low_score"
+            elif row["kol_propuskov"] is not None and row["kol_propuskov"] > HIGH_ABSENCES_THRESHOLD:
+                tag = "many_absences"
+            else:
+                tag = "even" if index % 2 else "odd"
             self.student_table.insert(
-                "", "end", iid=str(row["id"]), tags=tags,
+                "", "end", iid=str(row["id"]), tags=(tag,),
                 values=(row["id"], row["fio"], fmt_number(row["itog_ball"]),
                         fmt_number(row["kol_propuskov"])))
+
+        if rows:
+            self.empty_label.place_forget()
+        else:
+            self.empty_label.place(relx=0.5, rely=0.5, anchor="center")
 
         self._update_heading_arrows()
         self.on_table_select()
 
-        self.total_students_label.config(text=f"Всего студентов: {stats.total}")
-        self.shown_label.config(text=f"Показано: {len(rows)}")
-        self.avg_score_label.config(text=f"Средний балл: {fmt_number(round(stats.avg_score, 2) if stats.avg_score is not None else None)}")
-        self.avg_absences_label.config(text=f"Среднее пропусков: {fmt_number(round(stats.avg_absences, 2) if stats.avg_absences is not None else None)}")
+        self.total_students_label.config(text=str(stats.total))
+        self.shown_label.config(text=str(len(rows)))
+        self.avg_score_label.config(text=fmt_number(round(stats.avg_score, 2) if stats.avg_score is not None else None))
+        self.avg_absences_label.config(text=fmt_number(round(stats.avg_absences, 2) if stats.avg_absences is not None else None))
 
     def on_table_select(self, _event=None):
         state = tk.NORMAL if self.student_table.selection() else tk.DISABLED
@@ -204,9 +269,12 @@ class StudentsPage:
             messagebox.showerror("Ошибка", "Студент не найден в базе данных.")
             return
 
+        p = self.app.palette
         win = tk.Toplevel(self.main_frame)
         win.title(f"Подробная информация ({student['fio']})")
-        win.geometry("900x680")
+        height = min(720, win.winfo_screenheight() - 80)  # не вылезаем за экран ноутбука
+        win.geometry(f"940x{height}")
+        win.configure(background=p["bg"])
         win.transient(self.main_frame.winfo_toplevel())
         win.grab_set()
         win.bind("<Escape>", lambda _e: win.destroy())
@@ -214,40 +282,56 @@ class StudentsPage:
         container = ttk.Frame(win, padding=20)
         container.pack(fill="both", expand=True)
 
-        # --- Основная информация ---
+        # --- Карточка студента: аватар, ФИО, место, ключевые цифры ---
         rank = repository.get_rank(student_id)
         total = repository.get_stats().total
-        info = ttk.LabelFrame(container, text="Основная информация", padding=15)
-        info.pack(fill="x", pady=(0, 10))
-        ttk.Label(info, text=f"ФИО: {student['fio']}", font=(FONT_FAMILY, 11, "bold")).pack(anchor="w", pady=2)
-        ttk.Label(info, text=f"Итоговый балл: {fmt_number(student['itog_ball'])}").pack(anchor="w", pady=2)
-        ttk.Label(info, text=f"Количество пропусков: {fmt_number(student['kol_propuskov'])}").pack(anchor="w", pady=2)
         place = f"{rank} из {total}" if rank else "нет итогового балла"
-        ttk.Label(info, text=f"Место в группе: {place}", font=(FONT_FAMILY, 10, "bold")).pack(anchor="w", pady=5)
+
+        top = ttk.Frame(container, style="Card.TFrame", padding=18)
+        top.pack(fill="x", pady=(0, 12))
+        top.columnconfigure(1, weight=1)
+
+        avatar = tk.Canvas(top, width=60, height=60, bg=p["surface"], bd=0, highlightthickness=0)
+        avatar.create_oval(2, 2, 58, 58, fill=p["accent"], outline="")
+        avatar.create_text(30, 30, text=initials(student["fio"]), fill=p["on_accent"],
+                           font=(FONT_FAMILY, 16, "bold"))
+        avatar.grid(row=0, column=0, rowspan=2, padx=(0, 16))
+
+        ttk.Label(top, text=student["fio"], style="Name.TLabel").grid(row=0, column=1, sticky="sw")
+        ttk.Label(top, text=f"Место в группе: {place}",
+                  style="Subtitle.TLabel").grid(row=1, column=1, sticky="nw")
+
+        for col, (value, caption) in enumerate(
+                ((fmt_number(student["itog_ball"]), "Итоговый балл"),
+                 (fmt_number(student["kol_propuskov"]), "Пропусков")), start=2):
+            tile = ttk.Frame(top, style="Surface.TFrame")
+            tile.grid(row=0, column=col, rowspan=2, padx=(28, 0))
+            ttk.Label(tile, text=value, style="Value.TLabel").pack()
+            ttk.Label(tile, text=caption, style="CardHint.TLabel").pack()
 
         # --- Дата, до которой учитываем занятия ---
         last_date = repository.get_last_graded_date()
         date_var = tk.StringVar(value=iso_to_display(last_date))
         date_row = ttk.Frame(container)
-        date_row.pack(fill="x", pady=(0, 10))
+        date_row.pack(fill="x", pady=(0, 12))
         ttk.Label(date_row, text="Учитывать занятия до:").pack(side="left")
         date_entry = ttk.Entry(date_row, textvariable=date_var, width=12)
-        date_entry.pack(side="left", padx=8)
-        ttk.Label(date_row, text="(дд.мм.гггг; по умолчанию — дата последнего оценённого занятия)",
-                  style="Hint.TLabel").pack(side="left")
+        date_entry.pack(side="left", padx=10)
+        apply_btn = ttk.Button(date_row, text="Применить", style="Secondary.TButton", cursor="hand2")
+        apply_btn.pack(side="left")
+        ttk.Label(date_row, text="дд.мм.гггг · по умолчанию — дата последнего оценённого занятия",
+                  style="Hint.TLabel").pack(side="left", padx=12)
 
         # --- Таблицы ---
-        lessons_frame = ttk.LabelFrame(container, text="Пропущенные занятия", padding=10)
-        lessons_frame.pack(fill="both", expand=True, pady=(0, 10))
+        lessons_card, lessons_title = self._table_card(container, "Пропущенные занятия")
         lessons_table = self._build_activity_table(
-            lessons_frame, (("date", "Дата", 90, "center"), ("name", "Занятие", 90, "center"),
-                            ("topic", "Тема", 600, "w")))
+            lessons_card, (("date", "Дата", 100, "center"), ("name", "Занятие", 110, "center"),
+                           ("topic", "Тема", 600, "w")))
 
-        works_frame = ttk.LabelFrame(container, text="Работы без оценки", padding=10)
-        works_frame.pack(fill="both", expand=True)
+        works_card, works_title = self._table_card(container, "Работы без оценки")
         works_table = self._build_activity_table(
-            works_frame, (("date", "Дата", 90, "center"), ("name", "Название", 200, "w"),
-                          ("type", "Тип", 90, "center"), ("topic", "Тема", 400, "w")))
+            works_card, (("date", "Дата", 100, "center"), ("name", "Название", 220, "w"),
+                         ("type", "Тип", 100, "center"), ("topic", "Тема", 400, "w")))
 
         def fill(_event=None):
             try:
@@ -262,33 +346,43 @@ class StudentsPage:
 
             lessons_table.delete(*lessons_table.get_children())
             works_table.delete(*works_table.get_children())
-            for r in lessons:
+            for i, r in enumerate(lessons):
                 name = f"Урок {r['nazvanie']}" if r["nazvanie"].isdigit() else r["nazvanie"]
-                lessons_table.insert("", "end", values=(iso_to_display(r["data"]), name, r["tema"] or ""))
-            for r in works:
-                works_table.insert("", "end", values=(iso_to_display(r["data"]), r["nazvanie"],
-                                                      r["tip"], r["tema"] or ""))
-            lessons_frame.config(text=f"Пропущенные занятия ({len(lessons)})")
-            works_frame.config(text=f"Работы без оценки ({len(works)})")
+                lessons_table.insert("", "end", tags=("even" if i % 2 else "odd",),
+                                     values=(iso_to_display(r["data"]), name, r["tema"] or ""))
+            for i, r in enumerate(works):
+                works_table.insert("", "end", tags=("even" if i % 2 else "odd",),
+                                   values=(iso_to_display(r["data"]), r["nazvanie"],
+                                           r["tip"], r["tema"] or ""))
+            lessons_title.config(text=f"Пропущенные занятия ({len(lessons)})")
+            works_title.config(text=f"Работы без оценки ({len(works)})")
 
-        ttk.Button(date_row, text="Применить", style="Secondary.TButton", command=fill).pack(side="left")
+        apply_btn.config(command=fill)
         date_entry.bind("<Return>", fill)
 
-        ttk.Button(container, text="Закрыть", style="Secondary.TButton",
-                   command=win.destroy).pack(pady=(12, 0))
+        ttk.Button(container, text="Закрыть", style="Secondary.TButton", cursor="hand2",
+                   command=win.destroy).pack(pady=(14, 0), anchor="e")
         fill()
 
     @staticmethod
-    def _build_activity_table(parent, columns):
-        frame = ttk.Frame(parent)
+    def _table_card(parent, title):
+        card = ttk.Frame(parent, style="Card.TFrame", padding=14)
+        card.pack(fill="both", expand=True, pady=(0, 12))
+        title_label = ttk.Label(card, text=title, style="CardTitle.TLabel")
+        title_label.pack(anchor="w", pady=(0, 8))
+        return card, title_label
+
+    def _build_activity_table(self, parent, columns):
+        frame = ttk.Frame(parent, style="Surface.TFrame")
         frame.pack(fill="both", expand=True)
         ids = [c[0] for c in columns]
         table = ttk.Treeview(frame, columns=ids, show="headings", height=5)
         scroll = ttk.Scrollbar(frame, orient="vertical", command=table.yview)
         table.configure(yscrollcommand=scroll.set)
         for col_id, title, width, anchor in columns:
-            table.heading(col_id, text=title)
+            table.heading(col_id, text=title, anchor=anchor)
             table.column(col_id, width=width, anchor=anchor)
+        configure_tree_tags(table, self.app.palette)
         scroll.pack(side="right", fill="y")
         table.pack(side="left", fill="both", expand=True)
         return table
