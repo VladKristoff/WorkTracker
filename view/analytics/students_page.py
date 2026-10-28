@@ -7,6 +7,7 @@ from config import FONT_FAMILY, LOW_SCORE_THRESHOLD, HIGH_ABSENCES_THRESHOLD
 from database import repository
 from styles import configure_tree_tags
 from utils.dates import iso_to_display, display_to_iso
+from view.tabs import build_tabs
 
 
 def fmt_number(value, empty="—"):
@@ -33,11 +34,18 @@ class StudentsPage:
 
         self.search_var = tk.StringVar()
         self.sort_var = tk.StringVar(value="Без сортировки")
-        self.sort_column = None   # столбец БД
+        self.sort_column = None  # столбец БД
         self.sort_dir = "ASC"
         self.current_rows = []
         self._search_job = None
         self._legend_swatches = []  # (виджет, ключ цвета в палитре, ключ цвета рамки)
+
+        # Пороги подсветки: редактируются пользователем, начальные значения — из config
+        self.low_score = float(LOW_SCORE_THRESHOLD)
+        self.high_absences = float(HIGH_ABSENCES_THRESHOLD)
+        self.low_score_var = tk.StringVar(value=fmt_number(self.low_score))
+        self.high_absences_var = tk.StringVar(value=fmt_number(self.high_absences))
+        self._threshold_job = None
 
         self.create_widgets()
         self.refresh_table()
@@ -53,8 +61,7 @@ class StudentsPage:
 
         ttk.Button(header_frame, text="←  Назад", cursor="hand2", style="HeaderGhost.TButton",
                    command=self.back_to_main_menu).pack(side="left", padx=(14, 0), pady=10)
-        ttk.Label(header_frame, text="Успеваемость студентов",
-                  style="Header.TLabel").pack(side="left", padx=16)
+        build_tabs(header_frame, self.app, "students_page", self.filepath).pack(side="left", padx=16)
         self.theme_btn = ttk.Button(header_frame, text=self.app.theme_icon, width=3,
                                     cursor="hand2", style="HeaderGhost.TButton",
                                     command=self.app.toggle_theme)
@@ -100,15 +107,27 @@ class StudentsPage:
 
         # --- Легенда ---
         legend = self._card(panel, "Подсветка")
-        for bg_key, fg_key, text in (
-                ("low_bg", "low_fg", f"балл ниже {fmt_number(LOW_SCORE_THRESHOLD)}"),
-                ("warn_bg", "warn_fg", f"пропусков больше {HIGH_ABSENCES_THRESHOLD}")):
+        for bg_key, fg_key, text, var in (
+                ("low_bg", "low_fg", "балл ниже", self.low_score_var),
+                ("warn_bg", "warn_fg", "пропусков больше", self.high_absences_var)):
             row = ttk.Frame(legend, style="Surface.TFrame")
-            row.pack(anchor="w", pady=3)
+            row.pack(fill="x", pady=3)
             swatch = tk.Frame(row, width=16, height=16, highlightthickness=1)
             swatch.pack(side="left", padx=(0, 10))
             self._legend_swatches.append((swatch, bg_key, fg_key))
             ttk.Label(row, text=text, style="CardHint.TLabel").pack(side="left")
+            count_label = ttk.Label(row, text="0", style="CardTitle.TLabel", width=4, anchor="e")
+            count_label.pack(side="right")
+            entry = ttk.Entry(row, textvariable=var, width=6, justify="center")
+            entry.pack(side="right", padx=(0, 6))
+            var.trace_add("write", self.on_threshold_changed)
+            if bg_key == "low_bg":
+                self.low_count_label = count_label
+            else:
+                self.warn_count_label = count_label
+        ttk.Label(legend, text="Справа — сколько студентов подсвечено среди показанных. "
+                               "Пороги можно менять (например, 7.5)",
+                  style="CardHint.TLabel", wraplength=240, justify="left").pack(anchor="w", pady=(6, 0))
         self._recolor_legend()
 
         self.moreinfo_btn = ttk.Button(panel, text="Подробнее", cursor="hand2",
@@ -183,6 +202,27 @@ class StudentsPage:
             self.main_frame.after_cancel(self._search_job)
         self._search_job = self.main_frame.after(self.SEARCH_DELAY_MS, self.refresh_table)
 
+    def on_threshold_changed(self, *_):
+        if self._threshold_job:
+            self.main_frame.after_cancel(self._threshold_job)
+        self._threshold_job = self.main_frame.after(400, self.apply_thresholds)
+
+    def apply_thresholds(self):
+        """Применяет введённые пороги; некорректный ввод игнорируется (остаётся прежнее значение)."""
+        self._threshold_job = None
+        changed = False
+        for var, attr in ((self.low_score_var, "low_score"),
+                          (self.high_absences_var, "high_absences")):
+            try:
+                value = float(var.get().strip().replace(",", "."))
+            except ValueError:
+                continue
+            if value != getattr(self, attr):
+                setattr(self, attr, value)
+                changed = True
+        if changed:
+            self.refresh_table()
+
     def on_sort_selected(self, _event=None):
         option = repository.SORT_OPTIONS.get(self.sort_var.get())
         self.sort_column, self.sort_dir = option if option else (None, "ASC")
@@ -218,9 +258,9 @@ class StudentsPage:
         self.student_table.delete(*self.student_table.get_children())
         for index, row in enumerate(rows):
             # Один тег на строку: подсветка проблем важнее чередования
-            if row["itog_ball"] is not None and row["itog_ball"] < LOW_SCORE_THRESHOLD:
+            if row["itog_ball"] is not None and row["itog_ball"] < self.low_score:
                 tag = "low_score"
-            elif row["kol_propuskov"] is not None and row["kol_propuskov"] > HIGH_ABSENCES_THRESHOLD:
+            elif row["kol_propuskov"] is not None and row["kol_propuskov"] > self.high_absences:
                 tag = "many_absences"
             else:
                 tag = "even" if index % 2 else "odd"
@@ -228,6 +268,13 @@ class StudentsPage:
                 "", "end", iid=str(row["id"]), tags=(tag,),
                 values=(row["id"], row["fio"], fmt_number(row["itog_ball"]),
                         fmt_number(row["kol_propuskov"])))
+
+        low_count = sum(1 for r in rows
+                        if r["itog_ball"] is not None and r["itog_ball"] < self.low_score)
+        warn_count = sum(1 for r in rows
+                         if r["kol_propuskov"] is not None and r["kol_propuskov"] > self.high_absences)
+        self.low_count_label.config(text=str(low_count))
+        self.warn_count_label.config(text=str(warn_count))
 
         if rows:
             self.empty_label.place_forget()
@@ -240,7 +287,8 @@ class StudentsPage:
         self.total_students_label.config(text=str(stats.total))
         self.shown_label.config(text=str(len(rows)))
         self.avg_score_label.config(text=fmt_number(round(stats.avg_score, 2) if stats.avg_score is not None else None))
-        self.avg_absences_label.config(text=fmt_number(round(stats.avg_absences, 2) if stats.avg_absences is not None else None))
+        self.avg_absences_label.config(
+            text=fmt_number(round(stats.avg_absences, 2) if stats.avg_absences is not None else None))
 
     def on_table_select(self, _event=None):
         state = tk.NORMAL if self.student_table.selection() else tk.DISABLED
@@ -338,7 +386,7 @@ class StudentsPage:
                 up_to = display_to_iso(date_var.get())
             except ValueError:
                 messagebox.showerror("Неверная дата", "Введите дату в формате дд.мм.гггг, "
-                                     "например 06.10.2025.", parent=win)
+                                                      "например 06.10.2025.", parent=win)
                 return
             rows = repository.get_empty_activities(student_id, up_to)
             lessons = [r for r in rows if r["tip"] in repository.LESSON_TYPES]
