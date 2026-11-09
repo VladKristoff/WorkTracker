@@ -34,6 +34,8 @@ PALETTES = {
         "low_fg": "#991B1B",
         "warn_bg": "#FEF3C7",
         "warn_fg": "#92400E",
+        "worst_bg": "#FFE4E6",
+        "worst_fg": "#9F1239",
         "deco1": "#E4E8FB",
         "deco2": "#D9F5EA",
     },
@@ -65,6 +67,8 @@ PALETTES = {
         "low_fg": "#FCA5A5",
         "warn_bg": "#3D3217",
         "warn_fg": "#FCD34D",
+        "worst_bg": "#4C1D2E",
+        "worst_fg": "#FDA4AF",
         "deco1": "#161B3A",
         "deco2": "#0F2C2B",
     },
@@ -77,6 +81,9 @@ def configure_tree_tags(tree, p):
     tree.tag_configure("even", background=p["surface_alt"])
     tree.tag_configure("low_score", background=p["low_bg"], foreground=p["low_fg"])
     tree.tag_configure("many_absences", background=p["warn_bg"], foreground=p["warn_fg"])
+    # 5 худших по баллу — всегда, жирным и отдельным цветом
+    tree.tag_configure("worst_five", background=p["worst_bg"], foreground=p["worst_fg"],
+                       font=(FONT_FAMILY, 10, "bold"))
 
 
 def _button(style, name, *, bg, hover, pressed, fg, fg_pressed=None,
@@ -185,5 +192,23 @@ def set_styles(root, theme="light"):
                 fg=p["text"], disabled_bg=base, disabled_fg=p["disabled_fg"],
                 font=(F, 11, "bold"), padding=(12, 8))
     style.configure("ArrowButton.TButton", font=(F, 12, "bold"))  # совместимость со старым кодом
+
+    # --- Вкладки в шапке: сегментированный переключатель (таблетка) ---
+    style.configure("TabsBar.TFrame", background=p["btn2"], relief="solid", borderwidth=1,
+                    bordercolor=p["border"], lightcolor=p["border"], darkcolor=p["border"])
+    _button(style, "TabActive.TButton", bg=p["surface"], hover=p["surface"], pressed=p["surface"],
+            fg=p["accent"], disabled_bg=p["surface"], disabled_fg=p["disabled_fg"],
+            font=(F, 10, "bold"), padding=(20, 9))
+    _button(style, "Tab.TButton", bg=p["btn2"], hover=p["btn2_hover"], pressed=p["btn2_active"],
+            fg=p["muted"], disabled_bg=p["btn2"], disabled_fg=p["disabled_fg"],
+            font=(F, 10, "bold"), padding=(20, 9))
+
+    # --- Пункты списка диаграмм (боковая панель) ---
+    _button(style, "ChartItemActive.TButton", bg=p["accent_soft"], hover=p["accent_soft"],
+            pressed=p["accent_soft"], fg=p["accent"], disabled_bg=p["accent_soft"],
+            disabled_fg=p["disabled_fg"], font=(F, 10, "bold"), padding=(12, 10))
+    _button(style, "ChartItem.TButton", bg=p["surface"], hover=p["surface_alt"],
+            pressed=p["surface_alt"], fg=p["text"], disabled_bg=p["surface"],
+            disabled_fg=p["disabled_fg"], font=(F, 10), padding=(12, 10))
 
     return p

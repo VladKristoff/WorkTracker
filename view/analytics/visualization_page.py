@@ -1,11 +1,14 @@
 import math
 import os
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk, messagebox
 
-from config import FONT_FAMILY, LOW_SCORE_THRESHOLD
+from config import FONT_FAMILY, LOW_SCORE_THRESHOLD, HIGH_ABSENCES_THRESHOLD
 from database import repository
 from view.tabs import build_tabs
+
+WORST_COUNT = 5  # сколько худших по баллам выделяем всегда
 
 
 def fmt_number(value):
@@ -21,27 +24,36 @@ def short_name(fio):
 
 
 class VisualizationPage:
-    SORT_VALUES = ("Баллы по убыванию", "Баллы по возрастанию", "Как в списке")
+    SORT_VALUES = ("По убыванию", "По возрастанию", "Как в списке")
+    # Яркий оранжевый для столбцов с большим числом пропусков: тёмно-коричневый warn_fg
+    # на жёлтой плашке «худших» сливался, а красный занят баллами
+    ABSENCE_COLORS = {"light": "#F97316", "dark": "#FB923C"}
 
     def __init__(self, main_frame, app, filepath):
         self.main_frame = main_frame
         self.app = app
         self.filepath = filepath
 
-        # Реестр диаграмм: ключ -> (название в списке слева, метод отрисовки).
-        # Чтобы добавить новую диаграмму, достаточно дописать сюда строку и метод draw_*.
+        # Реестр диаграмм: ключ -> название кнопки
         self.charts = {
-            "students_scores": ("Баллы студентов", self.draw_students_scores),
-            "avg_by_type": ("Средний балл по типам работ", self.draw_avg_by_type),
+            "scores": "Баллы студентов",
+            "missed": "Пропуски студентов",
         }
-        self.current_chart = "students_scores"
+        self.current_chart = "scores"
         self._chart_buttons = {}
-        self.sort_var = tk.StringVar(value=self.SORT_VALUES[0])
-        self.threshold = float(LOW_SCORE_THRESHOLD)
 
-        self._students = []   # [(фио, балл)] — только студенты с итоговым баллом
-        self._no_score = 0    # сколько студентов без итогового балла
-        self._types = []
+        self.sort_var = tk.StringVar(value=self.SORT_VALUES[0])
+
+        # Пороги подсветки: редактируются пользователем, начальные значения — из config
+        self.low_score = float(LOW_SCORE_THRESHOLD)
+        self.high_absences = float(HIGH_ABSENCES_THRESHOLD)
+        self.low_score_var = tk.StringVar(value=fmt_number(self.low_score))
+        self.high_absences_var = tk.StringVar(value=fmt_number(self.high_absences))
+        self._threshold_job = None
+
+        # Данные: [{"id", "fio", "score", "missed"}] — все студенты
+        self._rows = []
+        self._worst_ids = set()  # id пяти худших по баллам
 
         self.create_widgets()
         self.load_data()
@@ -89,14 +101,14 @@ class VisualizationPage:
         card = ttk.Frame(panel, style="Card.TFrame", padding=16)
         card.pack(fill="x", pady=(0, 14))
         ttk.Label(card, text="Диаграммы", style="CardTitle.TLabel").pack(anchor="w", pady=(0, 10))
-        for key, (title, _draw) in self.charts.items():
+        for key, title in self.charts.items():
             btn = ttk.Button(card, text=title, cursor="hand2",
                              command=lambda k=key: self.select_chart(k))
             btn.pack(fill="x", pady=2)
             self._chart_buttons[key] = btn
         self._update_chart_buttons()
 
-        # --- Сортировка (для диаграммы по студентам) ---
+        # --- Сортировка ---
         sort_card = ttk.Frame(panel, style="Card.TFrame", padding=16)
         sort_card.pack(fill="x", pady=(0, 14))
         ttk.Label(sort_card, text="Сортировка", style="CardTitle.TLabel").pack(anchor="w", pady=(0, 10))
@@ -104,28 +116,43 @@ class VisualizationPage:
                              values=self.SORT_VALUES)
         combo.pack(fill="x")
         combo.bind("<<ComboboxSelected>>", lambda _e: self.draw())
-        ttk.Label(sort_card, text="Действует для диаграммы «Баллы студентов»",
-                  style="CardHint.TLabel", wraplength=240, justify="left").pack(anchor="w", pady=(8, 0))
 
-        # --- Сводка ---
+        # --- Пороги подсветки ---
+        thr_card = ttk.Frame(panel, style="Card.TFrame", padding=16)
+        thr_card.pack(fill="x", pady=(0, 14))
+        ttk.Label(thr_card, text="Подсветка", style="CardTitle.TLabel").pack(anchor="w", pady=(0, 10))
+        for text, var in (("балл ниже", self.low_score_var),
+                          ("пропусков больше", self.high_absences_var)):
+            row = ttk.Frame(thr_card, style="Surface.TFrame")
+            row.pack(fill="x", pady=3)
+            ttk.Label(row, text=text, style="CardHint.TLabel").pack(side="left")
+            entry = ttk.Entry(row, textvariable=var, width=6, justify="center")
+            entry.pack(side="right")
+            var.trace_add("write", self.on_threshold_changed)
+        ttk.Label(thr_card, text="Пороги можно менять (например, 7.5)",
+                  style="CardHint.TLabel", wraplength=240, justify="left").pack(anchor="w", pady=(6, 0))
+
+        # --- Сводка (зависит от выбранной диаграммы) ---
         stats = ttk.Frame(panel, style="Card.TFrame", padding=16)
         stats.pack(fill="x", pady=(0, 14))
-        ttk.Label(stats, text="Сводка", style="CardTitle.TLabel").pack(anchor="w", pady=(0, 10))
-        self.best_label = self._stat(stats, "Лучший результат")
-        self.avg_label = self._stat(stats, "Средний балл")
-        self.low_label = self._stat(stats, "Ниже порога")
+        self.summary_title = ttk.Label(stats, text="Сводка", style="CardTitle.TLabel")
+        self.summary_title.pack(anchor="w", pady=(0, 10))
+        self.best_label, self.best_caption = self._stat(stats, "")
+        self.avg_label, self.avg_caption = self._stat(stats, "")
+        self.low_label, self.low_caption = self._stat(stats, "")
 
     @staticmethod
     def _stat(parent, caption):
         value = ttk.Label(parent, text="—", style="Value.TLabel", font=(FONT_FAMILY, 16, "bold"))
         value.pack(anchor="w")
-        ttk.Label(parent, text=caption, style="CardHint.TLabel").pack(anchor="w", pady=(0, 6))
-        return value
+        cap = ttk.Label(parent, text=caption, style="CardHint.TLabel")
+        cap.pack(anchor="w", pady=(0, 6))
+        return value, cap
 
     def _update_chart_buttons(self):
         for key, btn in self._chart_buttons.items():
-            btn.config(style="ChartItemActive.TButton" if key == self.current_chart
-                       else "ChartItem.TButton")
+            btn.config(style="MainButton.TButton" if key == self.current_chart
+                       else "Secondary.TButton")
 
     # ------------------------------------------------------------------
     # Данные и действия
@@ -134,26 +161,81 @@ class VisualizationPage:
     def load_data(self):
         try:
             rows = repository.get_students()
-            self._types = repository.get_avg_by_type()
         except Exception as e:
             messagebox.showerror("Ошибка базы данных", f"Не удалось получить данные:\n{e}")
             return
 
-        self._students = [(r["fio"], r["itog_ball"]) for r in rows if r["itog_ball"] is not None]
-        self._no_score = len(rows) - len(self._students)
+        self._rows = [{"id": r["id"], "fio": r["fio"], "score": r["itog_ball"],
+                       "missed": r["missed"]} for r in rows]
 
-        if self._students:
-            best_name, best_score = max(self._students, key=lambda s: s[1])
-            avg = sum(s[1] for s in self._students) / len(self._students)
-            low = sum(1 for s in self._students if s[1] < self.threshold)
-            self.best_label.config(text=f"{fmt_number(best_score)} · {short_name(best_name)}")
-            self.avg_label.config(text=fmt_number(avg))
-            self.low_label.config(text=f"{low} из {len(self._students)}")
+        # 5 худших по итоговому баллу — выделяются на обеих диаграммах всегда,
+        # независимо от порогов
+        scored = sorted((r for r in self._rows if r["score"] is not None),
+                        key=lambda r: r["score"])
+        self._worst_ids = {r["id"] for r in scored[:WORST_COUNT]}
+        self._update_summary()
+
+    def _values(self, key):
+        """[(строка, значение)] для диаграммы; студенты без значения не попадают."""
+        field = "score" if key == "scores" else "missed"
+        return [(r, r[field]) for r in self._rows if r[field] is not None]
+
+    def _update_summary(self):
+        key = self.current_chart
+        data = self._values(key)
+        if key == "scores":
+            self.summary_title.config(text="Сводка по баллам")
+            captions = ("Лучший результат", "Средний балл", "Ниже порога")
+        else:
+            self.summary_title.config(text="Сводка по пропускам")
+            captions = ("Больше всех пропусков", "Среднее пропусков", "Выше порога")
+        self.best_caption.config(text=captions[0])
+        self.avg_caption.config(text=captions[1])
+        self.low_caption.config(text=captions[2])
+
+        if not data:
+            for lbl in (self.best_label, self.avg_label, self.low_label):
+                lbl.config(text="—")
+            return
+
+        if key == "scores":
+            best_row, best_val = max(data, key=lambda d: d[1])
+            flagged = sum(1 for _, v in data if v < self.low_score)
+        else:
+            best_row, best_val = max(data, key=lambda d: d[1])
+            flagged = sum(1 for _, v in data if v > self.high_absences)
+        avg = sum(v for _, v in data) / len(data)
+        self.best_label.config(text=f"{fmt_number(best_val)} · {short_name(best_row['fio'])}")
+        self.avg_label.config(text=fmt_number(avg))
+        self.low_label.config(text=f"{flagged} из {len(data)}")
 
     def select_chart(self, key):
         self.current_chart = key
         self._update_chart_buttons()
+        self._update_summary()
         self.draw()
+
+    def on_threshold_changed(self, *_):
+        if self._threshold_job:
+            self.main_frame.after_cancel(self._threshold_job)
+        self._threshold_job = self.main_frame.after(400, self.apply_thresholds)
+
+    def apply_thresholds(self):
+        """Применяет введённые пороги; некорректный ввод игнорируется."""
+        self._threshold_job = None
+        changed = False
+        for var, attr in ((self.low_score_var, "low_score"),
+                          (self.high_absences_var, "high_absences")):
+            try:
+                value = float(var.get().strip().replace(",", "."))
+            except ValueError:
+                continue
+            if value != getattr(self, attr):
+                setattr(self, attr, value)
+                changed = True
+        if changed:
+            self._update_summary()
+            self.draw()
 
     def back_to_main_menu(self):
         if messagebox.askyesno("Внимание!", "Вы уверены, что хотите выйти в главное меню?"):
@@ -174,122 +256,123 @@ class VisualizationPage:
         w, h = c.winfo_width(), c.winfo_height()
         c.configure(scrollregion=(0, 0, w, h))
         c.yview_moveto(0)
-        self.charts[self.current_chart][1](c)
+        if self.current_chart == "scores":
+            self.draw_bars(
+                c, key="scores", title="Баллы студентов",
+                subtitle="Итоговый балл каждого студента",
+                threshold=self.low_score, is_flagged=lambda v: v < self.low_score,
+                flag_text=f"ниже {fmt_number(self.low_score)}", avg_caption="средний балл",
+                empty_text="Нет итоговых баллов для диаграммы",
+                missing_text="Студентов без итогового балла (не показаны)",
+                flag_color=self.app.palette["low_fg"])
+        else:
+            self.draw_bars(
+                c, key="missed", title="Пропуски студентов",
+                subtitle="Количество пропущенных занятий каждого студента",
+                threshold=self.high_absences, is_flagged=lambda v: v > self.high_absences,
+                flag_text=f"больше {fmt_number(self.high_absences)}", avg_caption="в среднем",
+                empty_text="Нет данных о пропусках для диаграммы",
+                missing_text="Студентов без данных о пропусках (не показаны)",
+                flag_color=self.ABSENCE_COLORS[self.app.theme])
 
     def _title(self, c, title, subtitle):
         p = self.app.palette
         c.create_text(28, 26, anchor="nw", text=title, fill=p["text"], font=(FONT_FAMILY, 15, "bold"))
         c.create_text(28, 54, anchor="nw", text=subtitle, fill=p["muted"], font=(FONT_FAMILY, 10))
 
-    def draw_students_scores(self, c):
-        """Горизонтальные столбцы: студент — его итоговый балл."""
+    def draw_bars(self, c, key, title, subtitle, threshold, is_flagged, flag_text,
+                  avg_caption, empty_text, missing_text, flag_color):
+        """Горизонтальные столбцы: студент — значение. Общий код для обеих диаграмм."""
         p, F = self.app.palette, FONT_FAMILY
         w, view_h = c.winfo_width(), c.winfo_height()
         if w < 50 or view_h < 50:
             return
 
-        self._title(c, "Баллы студентов", "Итоговый балл каждого студента")
-        # Легенда
-        lx = w - 28
-        for color, text in ((p["low_fg"], f"ниже {fmt_number(self.threshold)}"), (p["accent"], "остальные")):
-            tw = len(text) * 7
-            c.create_text(lx, 34, anchor="e", text=text, fill=p["muted"], font=(F, 10))
-            c.create_rectangle(lx - tw - 22, 28, lx - tw - 10, 40, fill=color, outline="")
-            lx -= tw + 40
+        self._title(c, title, subtitle)
 
-        if not self._students:
-            c.create_text(w / 2, view_h / 2, text="Нет итоговых баллов для диаграммы",
-                          fill=p["muted"], font=(F, 12))
+        # Легенда (справа налево): 5 худших, превышение порога, остальные
+        legend = [(None, f"{WORST_COUNT} худших по баллам"),
+                  (flag_color, flag_text),
+                  (p["accent"], "остальные")]
+        legend_font = tkfont.Font(family=F, size=10)  # точная ширина текста вместо оценки на глаз
+        lx = w - 28
+        for color, text in legend:
+            tw = legend_font.measure(text)
+            c.create_text(lx, 34, anchor="e", text=text, fill=p["muted"], font=(F, 10))
+            sx = lx - tw - 10  # правый край образца
+            if color is None:  # образец выделения: плашка с рамкой
+                c.create_rectangle(sx - 16, 26, sx, 42,
+                                   fill=p["warn_bg"], outline=p["warn_fg"], width=2)
+            else:
+                c.create_rectangle(sx - 16, 26, sx, 42, fill=color, outline="")
+            lx = sx - 16 - 22
+
+        pairs = self._values(key)
+        missing = len(self._rows) - len(pairs)
+        if not pairs:
+            c.create_text(w / 2, view_h / 2, text=empty_text, fill=p["muted"], font=(F, 12))
             return
 
-        data = list(self._students)
         order = self.sort_var.get()
-        if order == "Баллы по убыванию":
-            data.sort(key=lambda s: -s[1])
-        elif order == "Баллы по возрастанию":
-            data.sort(key=lambda s: s[1])
+        if order == "По убыванию":
+            pairs.sort(key=lambda d: -d[1])
+        elif order == "По возрастанию":
+            pairs.sort(key=lambda d: d[1])
 
-        n = len(data)
+        n = len(pairs)
         top, bottom, left, right = 112, 56, 200, 70
         row_h = max(24, (view_h - top - bottom) / n)
         total_h = top + n * row_h + bottom
         c.configure(scrollregion=(0, 0, w, max(total_h, view_h)))
 
-        y_max = max(1, math.ceil(max(s[1] for s in data)))
+        # Шкала: шаг подбираем так, чтобы было не больше ~10 делений
+        max_val = max(v for _, v in pairs)
+        step = max(1, math.ceil(max_val / 10))
+        y_max = max(step, math.ceil(max_val / step) * step)
         x0, x1 = left, w - right
         scale = (x1 - x0) / y_max
         base_y = top + n * row_h
 
+        # Плашки под строками 5 худших (рисуем первыми, чтобы лежали под сеткой и столбцами)
+        for i, (row, _v) in enumerate(pairs):
+            if row["id"] in self._worst_ids:
+                y_a, y_b = top + row_h * i + 1, top + row_h * (i + 1) - 1
+                c.create_rectangle(16, y_a, w - 16, y_b, fill=p["warn_bg"],
+                                   outline=p["warn_fg"], width=1)
+
         # Сетка и подписи шкалы сверху
-        ticks = min(y_max, 10)
-        for i in range(ticks + 1):
-            value = y_max * i / ticks
+        for i in range(y_max // step + 1):
+            value = i * step
             x = x0 + value * scale
             c.create_line(x, top - 6, x, base_y, fill=p["border"])
             c.create_text(x, top - 12, anchor="s", text=f"{value:g}", fill=p["muted"], font=(F, 9))
 
         bar_h = row_h * 0.62
-        for i, (fio, score) in enumerate(data):
+        for i, (row, value) in enumerate(pairs):
             cy = top + row_h * (i + 0.5)
-            color = p["low_fg"] if score < self.threshold else p["accent"]
-            c.create_text(left - 12, cy, anchor="e", text=short_name(fio), fill=p["text"], font=(F, 10))
-            c.create_rectangle(x0, cy - bar_h / 2, max(x0 + 2, x0 + score * scale), cy + bar_h / 2,
-                               fill=color, outline="")
-            c.create_text(x0 + score * scale + 8, cy, anchor="w", text=fmt_number(score),
-                          fill=p["text"], font=(F, 10, "bold"))
+            worst = row["id"] in self._worst_ids
+            color = flag_color if is_flagged(value) else p["accent"]
+            name = short_name(row["fio"])
+            if worst:
+                c.create_text(left - 12, cy, anchor="e", text=f"▼ {name}",
+                              fill=p["warn_fg"], font=(F, 10, "bold"))
+            else:
+                c.create_text(left - 12, cy, anchor="e", text=name, fill=p["text"], font=(F, 10))
+            c.create_rectangle(x0, cy - bar_h / 2, max(x0 + 2, x0 + value * scale), cy + bar_h / 2,
+                               fill=color, outline=p["warn_fg"] if worst else "",
+                               width=2 if worst else 1)
+            c.create_text(x0 + value * scale + 8, cy, anchor="w", text=fmt_number(value),
+                          fill=p["warn_fg"] if worst else p["text"], font=(F, 10, "bold"))
 
-        # Линия среднего балла
-        avg = sum(s[1] for s in data) / n
+        # Линия среднего значения
+        avg = sum(v for _, v in pairs) / n
         ax = x0 + avg * scale
         c.create_line(ax, top - 6, ax, base_y, fill=p["muted"], dash=(5, 4), width=2)
-        c.create_text(ax, base_y + 10, anchor="n", text=f"средний балл {fmt_number(avg)}",
+        c.create_text(ax, base_y + 10, anchor="n", text=f"{avg_caption} {fmt_number(avg)}",
                       fill=p["muted"], font=(F, 10, "bold"))
         c.create_line(x0, top - 6, x0, base_y, fill=p["muted"])
-
-        if self._no_score:
-            c.create_text(28, base_y + 32, anchor="nw", fill=p["muted"], font=(F, 9),
-                          text=f"Студентов без итогового балла (не показаны): {self._no_score}")
-
-    def draw_avg_by_type(self, c):
-        p, F = self.app.palette, FONT_FAMILY
-        w, h = c.winfo_width(), c.winfo_height()
-        if w < 50 or h < 50:
-            return
-
-        self._title(c, "Средний балл по типам работ",
-                    "Яркий столбец — средний полученный балл, бледный — максимум за работу")
-
-        if not self._types:
-            c.create_text(w / 2, h / 2, text="Нет данных для диаграммы", fill=p["muted"], font=(F, 12))
-            return
-
-        left, right, top, bottom = 64, 32, 100, 80
-        plot_w, plot_h = w - left - right, h - top - bottom
-        y_max = max(d["max_ball"] for d in self._types)
-        base_y = top + plot_h
-
-        ticks = 5
-        for i in range(ticks + 1):
-            value = y_max * i / ticks
-            y = base_y - plot_h * i / ticks
-            c.create_line(left, y, w - right, y, fill=p["border"])
-            c.create_text(left - 10, y, anchor="e", text=f"{value:g}", fill=p["muted"], font=(F, 9))
-
-        slot = plot_w / len(self._types)
-        bar_w = min(96, slot * 0.5)
-        for i, d in enumerate(self._types):
-            cx = left + slot * (i + 0.5)
-            x0, x1 = cx - bar_w / 2, cx + bar_w / 2
-            max_y = base_y - plot_h * d["max_ball"] / y_max
-            avg_y = base_y - plot_h * d["avg"] / y_max
-
-            c.create_rectangle(x0, max_y, x1, base_y, fill=p["accent_soft"], outline="")
-            c.create_rectangle(x0, avg_y, x1, base_y, fill=p["accent"], outline="")
-            c.create_text(cx, avg_y - 8, anchor="s", text=fmt_number(d["avg"]),
-                          fill=p["text"], font=(F, 11, "bold"))
-            c.create_text(cx, base_y + 14, anchor="n", text=d["tip"], fill=p["text"], font=(F, 11, "bold"))
-            c.create_text(cx, base_y + 34, anchor="n",
-                          text=f"из {fmt_number(d['max_ball'])} · {d['count']} оценок",
-                          fill=p["muted"], font=(F, 9))
-
         c.create_line(left, base_y, w - right, base_y, fill=p["muted"])
+
+        if missing:
+            c.create_text(28, base_y + 32, anchor="nw", fill=p["muted"], font=(F, 9),
+                          text=f"{missing_text}: {missing}")
