@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from config import LESSONS_PER_PERIOD, NO_CONTROL_SCORE
+from config import NO_CONTROL_SCORE
 from database.database_manager import db_session
 
 SORT_OPTIONS = {
@@ -195,9 +195,13 @@ def period_grade(total: float) -> int:
 
 def get_control_report() -> list:
     """
-    Студенты, у которых по итогам периода (LESSONS_PER_PERIOD занятий) есть проблема:
-    не писали контрольную (последнее занятие периода пусто или равно NO_CONTROL_SCORE)
-    и/или оценка за период — 2.
+    Студенты, у которых по итогам периода есть проблема: не писали контрольную
+    (последнее занятие периода пусто или равно NO_CONTROL_SCORE) и/или оценка за период — 2.
+
+    Периоды задаются столбцами «оценка N» из файла: период — это занятия между двумя такими
+    столбцами, контрольная — последнее занятие перед столбцом оценки. Занятия после
+    последнего столбца оценки (например, уроки 28–32 после практических) в периоды не входят.
+    Число периодов и занятий в периоде может быть любым.
 
     Оценка считается здесь по сумме баллов, а не берётся из столбца «оценка N» файла:
     формулы Excel после сортировки списка могут ссылаться на чужие строки.
@@ -207,21 +211,26 @@ def get_control_report() -> list:
     Возвращает [{"student_id", "fio", "period", "date", "control", "total", "grade", "reasons"}].
     """
     with db_session() as conn:
-        # Занятия-«уроки» с числовым названием: 1, 2, 3 ... по порядку
-        lessons = sorted(
-            (r for r in conn.execute(
-                "SELECT id, nazvanie, data FROM Activities WHERE tip = ?", (LESSON_TYPE,))
-             if r["nazvanie"].strip().isdigit()),
-            key=lambda r: int(r["nazvanie"]))
+        # id идут в порядке столбцов файла, поэтому порядок по id = порядок в таблице Excel
+        activities = conn.execute(
+            "SELECT id, tip, data FROM Activities ORDER BY id").fetchall()
         students = conn.execute("SELECT id, fio FROM Students ORDER BY id").fetchall()
         scores = {(r["student_id"], r["activity_id"]): r["poluchenny_ball"]
                   for r in conn.execute(
                       "SELECT student_id, activity_id, poluchenny_ball FROM Grades")}
 
+    # Делим занятия на периоды по столбцам «оценка N»
+    periods, block = [], []
+    for a in activities:
+        if a["tip"] == LESSON_TYPE:
+            block.append(a)
+        elif a["tip"] == "Оценка":
+            if block:
+                periods.append(block)
+            block = []
+
     result = []
-    n = LESSONS_PER_PERIOD
-    for period, start in enumerate(range(0, len(lessons) - n + 1, n), 1):
-        block = lessons[start:start + n]
+    for period, block in enumerate(periods, 1):
         control = block[-1]
         if not any(scores.get((s["id"], control["id"])) is not None for s in students):
             continue  # контрольную ещё не проводили / не вносили
