@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
+from config import LESSONS_PER_PERIOD, NO_CONTROL_SCORE
 from database.database_manager import db_session
 
 SORT_OPTIONS = {
@@ -40,8 +41,9 @@ def database_has_data() -> bool:
         return False
 
 
-def get_students(search: str = "", sort_key: str = "Без сортировки", sort_column: str = None,
-                 sort_dir: str = "ASC", up_to_iso: str = None) -> list:
+def get_students(search: str = "", sort_key: str = "Без сортировки",
+                 sort_column: Optional[str] = None, sort_dir: str = "ASC",
+                 up_to_iso: Optional[str] = None) -> list:
     """
     Список студентов вместе с числом реально пропущенных уроков (прошедших и без оценки).
     Поиск регистронезависимый и для кириллицы
@@ -70,7 +72,7 @@ def get_students(search: str = "", sort_key: str = "Без сортировки"
     return rows
 
 
-def get_stats(up_to_iso: str = None) -> Stats:
+def get_stats(up_to_iso: Optional[str] = None) -> Stats:
     if up_to_iso is None:
         up_to_iso = get_last_graded_date()
     with db_session() as conn:
@@ -83,7 +85,7 @@ def get_stats(up_to_iso: str = None) -> Stats:
     return Stats(total or 0, avg_score, avg_missed)
 
 
-def get_student(student_id: int, up_to_iso: str = None):
+def get_student(student_id: int, up_to_iso: Optional[str] = None):
     if up_to_iso is None:
         up_to_iso = get_last_graded_date()
     with db_session() as conn:
@@ -178,3 +180,62 @@ def get_worst_five_ids() -> set:
             LIMIT 5
         """).fetchall()
     return {r["id"] for r in rows}
+
+
+def period_grade(total: float) -> int:
+    """Оценка за период по сумме баллов: та же шкала, что в формулах Excel."""
+    if total >= 3.5:
+        return 5
+    if total > 2.5:
+        return 4
+    if total > 1.5:
+        return 3
+    return 2
+
+
+def get_control_report() -> list:
+    """
+    Студенты, у которых по итогам периода (LESSONS_PER_PERIOD занятий) есть проблема:
+    не писали контрольную (последнее занятие периода пусто или равно NO_CONTROL_SCORE)
+    и/или оценка за период — 2.
+
+    Оценка считается здесь по сумме баллов, а не берётся из столбца «оценка N» файла:
+    формулы Excel после сортировки списка могут ссылаться на чужие строки.
+    Период считается проведённым, только если контрольную писал хоть кто-то —
+    иначе все получили бы «двойку» за ещё не прошедшие занятия.
+
+    Возвращает [{"student_id", "fio", "period", "date", "control", "total", "grade", "reasons"}].
+    """
+    with db_session() as conn:
+        # Занятия-«уроки» с числовым названием: 1, 2, 3 ... по порядку
+        lessons = sorted(
+            (r for r in conn.execute(
+                "SELECT id, nazvanie, data FROM Activities WHERE tip = ?", (LESSON_TYPE,))
+             if r["nazvanie"].strip().isdigit()),
+            key=lambda r: int(r["nazvanie"]))
+        students = conn.execute("SELECT id, fio FROM Students ORDER BY id").fetchall()
+        scores = {(r["student_id"], r["activity_id"]): r["poluchenny_ball"]
+                  for r in conn.execute(
+                      "SELECT student_id, activity_id, poluchenny_ball FROM Grades")}
+
+    result = []
+    n = LESSONS_PER_PERIOD
+    for period, start in enumerate(range(0, len(lessons) - n + 1, n), 1):
+        block = lessons[start:start + n]
+        control = block[-1]
+        if not any(scores.get((s["id"], control["id"])) is not None for s in students):
+            continue  # контрольную ещё не проводили / не вносили
+        for s in students:
+            ctrl = scores.get((s["id"], control["id"]))
+            total = sum(scores.get((s["id"], a["id"])) or 0 for a in block)
+            grade = period_grade(total)
+            reasons = []
+            if ctrl is None or ctrl == NO_CONTROL_SCORE:
+                reasons.append("не писал контрольную")
+            if grade == 2:
+                reasons.append("оценка 2")
+            if reasons:
+                result.append({"student_id": s["id"], "fio": s["fio"], "period": period,
+                               "date": control["data"], "control": ctrl,
+                               "total": round(total, 2), "grade": grade, "reasons": reasons})
+    return result

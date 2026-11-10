@@ -4,6 +4,7 @@ from tkinter import ttk
 TABS = (
     ("students_page", "Студенты"),
     ("visualization_page", "Визуализация"),
+    ("control_page", "Контрольные"),
 )
 
 
