@@ -6,10 +6,11 @@ from typing import Literal
 
 from tkcalendar import DateEntry
 
-from config import FONT_FAMILY, LOW_SCORE_THRESHOLD, HIGH_ABSENCES_THRESHOLD
+from config import FONT_FAMILY
 from database import repository
 from styles import configure_tree_tags
 from utils.dates import iso_to_display, iso_to_date, date_to_iso
+from utils.settings import load_thresholds, save_setting
 from view.tabs import build_tabs
 
 
@@ -46,9 +47,9 @@ class StudentsPage:
         self._search_job = None
         self._legend_swatches = []  # (виджет, ключ цвета в палитре, ключ цвета рамки)
 
-        # Пороги подсветки: редактируются пользователем, начальные значения — из config
-        self.low_score = float(LOW_SCORE_THRESHOLD)
-        self.high_absences = float(HIGH_ABSENCES_THRESHOLD)
+        # Пороги подсветки: редактируются пользователем и запоминаются в settings.json;
+        # если там ничего нет — берём значения по умолчанию из config
+        self.low_score, self.high_absences = load_thresholds()
         self.low_score_var = tk.StringVar(value=fmt_number(self.low_score))
         self.high_absences_var = tk.StringVar(value=fmt_number(self.high_absences))
         self._threshold_job = None
@@ -227,14 +228,16 @@ class StudentsPage:
         """Применяет введённые пороги; некорректный ввод игнорируется (остаётся прежнее значение)."""
         self._threshold_job = None
         changed = False
-        for var, attr in ((self.low_score_var, "low_score"),
-                          (self.high_absences_var, "high_absences")):
+        for var, attr, setting_key in (
+                (self.low_score_var, "low_score", "low_score_threshold"),
+                (self.high_absences_var, "high_absences", "high_absences_threshold")):
             try:
                 value = float(var.get().strip().replace(",", "."))
             except ValueError:
                 continue
             if value != getattr(self, attr):
                 setattr(self, attr, value)
+                save_setting(setting_key, value)
                 changed = True
         if changed:
             self.refresh_table()

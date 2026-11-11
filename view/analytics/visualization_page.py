@@ -4,8 +4,9 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk, messagebox
 
-from config import FONT_FAMILY, LOW_SCORE_THRESHOLD, HIGH_ABSENCES_THRESHOLD
+from config import FONT_FAMILY
 from database import repository
+from utils.settings import load_thresholds, save_setting
 from view.tabs import build_tabs
 
 WORST_COUNT = 5  # сколько худших по баллам выделяем всегда
@@ -45,8 +46,7 @@ class VisualizationPage:
         self.sort_var = tk.StringVar(value=self.SORT_VALUES[0])
 
         # Пороги подсветки: редактируются пользователем, начальные значения — из config
-        self.low_score = float(LOW_SCORE_THRESHOLD)
-        self.high_absences = float(HIGH_ABSENCES_THRESHOLD)
+        self.low_score, self.high_absences = load_thresholds()
         self.low_score_var = tk.StringVar(value=fmt_number(self.low_score))
         self.high_absences_var = tk.StringVar(value=fmt_number(self.high_absences))
         self._threshold_job = None
@@ -224,14 +224,16 @@ class VisualizationPage:
         """Применяет введённые пороги; некорректный ввод игнорируется."""
         self._threshold_job = None
         changed = False
-        for var, attr in ((self.low_score_var, "low_score"),
-                          (self.high_absences_var, "high_absences")):
+        for var, attr, setting_key in (
+                (self.low_score_var, "low_score", "low_score_threshold"),
+                (self.high_absences_var, "high_absences", "high_absences_threshold")):
             try:
                 value = float(var.get().strip().replace(",", "."))
             except ValueError:
                 continue
             if value != getattr(self, attr):
                 setattr(self, attr, value)
+                save_setting(setting_key, value)
                 changed = True
         if changed:
             self._update_summary()
