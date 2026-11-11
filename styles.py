@@ -147,6 +147,14 @@ def set_styles(root, theme="light"):
                     bordercolor=p["border"], lightcolor=p["border"], darkcolor=p["border"])
     style.map("TEntry", bordercolor=focus, lightcolor=focus, darkcolor=focus)
 
+    # --- Флажки на карточках ---
+    style.configure("Card.TCheckbutton", background=p["surface"], foreground=p["text"],
+                    focuscolor=p["surface"], indicatorbackground=p["input_bg"],
+                    indicatorforeground=p["accent"], font=(F, 10))
+    style.map("Card.TCheckbutton", background=[("active", p["surface"])],
+              indicatorbackground=[("selected", p["accent"]), ("active", p["accent_soft"])],
+              indicatorforeground=[("selected", p["on_accent"])])
+
     # --- Таблицы ---
     style.configure("Treeview", background=p["surface"], fieldbackground=p["surface"],
                     foreground=p["text"], rowheight=38, borderwidth=0, relief="flat",

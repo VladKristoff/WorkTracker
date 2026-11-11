@@ -56,6 +56,11 @@ class MainMenu:
                                      command=self.open_analytics_page, style="BlueButton.TButton")
         self.upload_btn.pack(fill="x")
 
+        self.builder_btn = ttk.Button(buttons, text="Создать Excel-файл", cursor="hand2",
+                                      style="Secondary.TButton",
+                                      command=lambda: self.app.show_window("excel_builder_page"))
+        self.builder_btn.pack(pady=(12, 0), fill="x")
+
         # Если данные уже загружались, даём продолжить без повторной загрузки xlsx
         last_file = load_settings().get("last_file")
         if last_file and database_has_data():
@@ -74,6 +79,7 @@ class MainMenu:
 
         ttk.Label(card, style="CardHint.TLabel", justify="center", wraplength=380,
                   text="Для начала работы загрузите файл с данными успеваемости.\n"
+                       "Нет файла? Создайте пустую структуру кнопкой выше.\n"
                        "Поддерживаемый формат: .xlsx").pack(pady=(28, 0))
 
     # ------------------------------------------------------------------
@@ -153,6 +159,7 @@ class MainMenu:
         self.is_loading = loading
         if loading:
             self.upload_btn.config(state=tk.DISABLED)
+            self.builder_btn.config(state=tk.DISABLED)
             self.status_label.config(text="Обработка файла…")
             self.status_label.pack(pady=(14, 0))
             self.progress.pack(pady=(6, 0))
@@ -162,3 +169,4 @@ class MainMenu:
             self.progress.pack_forget()
             self.status_label.pack_forget()
             self.upload_btn.config(state=tk.NORMAL)
+            self.builder_btn.config(state=tk.NORMAL)
