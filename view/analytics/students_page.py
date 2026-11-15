@@ -26,6 +26,9 @@ def initials(fio):
 
 WORST_COUNT = 5  # сколько худших по баллам выделяем всегда
 
+# Режимы вкладки «Оценки» в окне «Подробнее»
+GRADE_FILTERS = ("Выставленные оценки", "Все занятия", "Только итоги периодов")
+
 
 class StudentsPage:
     SEARCH_DELAY_MS = 250  # задержка перед поиском, чтобы не запрашивать БД на каждую букву
@@ -85,9 +88,10 @@ class StudentsPage:
         self._build_table(content_frame)
 
     @staticmethod
-    def _card(parent, title, pady=(0, 14)):
+    def _card(parent, title, pady=(0, 14), expand=False):
         card = ttk.Frame(parent, style="Card.TFrame", padding=16)
-        card.pack(fill="x", pady=pady)
+        # expand=True растягивает карточку до низа панели — низ панели совпадает с низом таблицы
+        card.pack(fill="both" if expand else "x", expand=expand, pady=pady)
         ttk.Label(card, text=title, style="CardTitle.TLabel").pack(anchor="w", pady=(0, 10))
         return card
 
@@ -95,6 +99,12 @@ class StudentsPage:
         panel = ttk.Frame(parent, width=290)
         panel.pack(side="left", fill="y", padx=(0, 18), anchor="n")
         panel.pack_propagate(False)
+
+        # Кнопка прижата к низу панели (упаковывается первой), карточка «Подсветка» занимает остаток
+        self.moreinfo_btn = ttk.Button(panel, text="Подробнее", cursor="hand2",
+                                       style="MainButton.TButton", state=tk.DISABLED,
+                                       command=self.open_student_window)
+        self.moreinfo_btn.pack(side="bottom", fill="x")
 
         # --- Поиск ---
         search = self._card(panel, "Поиск")
@@ -117,7 +127,7 @@ class StudentsPage:
         self.total_lessons_label = self._tile(grid, 2, 1, "Всего занятий")
 
         # --- Легенда ---
-        legend = self._card(panel, "Подсветка")
+        legend = self._card(panel, "Подсветка", pady=(0, 10), expand=True)
         for bg_key, fg_key, text, var in (
                 ("low_bg", "low_fg", "балл ниже", self.low_score_var),
                 ("warn_bg", "warn_fg", "пропусков больше", self.high_absences_var)):
@@ -140,11 +150,6 @@ class StudentsPage:
                                "Пороги можно менять (например, 7.5)",
                   style="CardHint.TLabel", wraplength=240, justify="left").pack(anchor="w", pady=(6, 0))
         self._recolor_legend()
-
-        self.moreinfo_btn = ttk.Button(panel, text="Подробнее", cursor="hand2",
-                                       style="MainButton.TButton", state=tk.DISABLED,
-                                       command=self.open_student_window)
-        self.moreinfo_btn.pack(pady=(4, 0), fill="x")
 
     @staticmethod
     def _tile(parent, row, col, caption):
@@ -387,11 +392,36 @@ class StudentsPage:
         missed_value.pack()
         ttk.Label(missed_tile, text="Пропущено занятий", style="CardHint.TLabel").pack()
 
+        # --- Вкладки окна: «Пропуски» / «Оценки» ---
+        tabs_bar = ttk.Frame(container, style="TabsBar.TFrame", padding=3)
+        tabs_bar.pack(anchor="w", pady=(0, 12))
+        # Кнопка «Закрыть» упаковывается раньше тела окна, чтобы всегда оставаться видимой
+        ttk.Button(container, text="Закрыть", style="Secondary.TButton", cursor="hand2",
+                   command=win.destroy).pack(side="bottom", pady=(10, 0), anchor="e")
+        body = ttk.Frame(container)
+        body.pack(fill="both", expand=True)
+        missed_page = ttk.Frame(body)
+        grades_page = ttk.Frame(body)
+        tab_buttons = {}
+
+        def show_tab(name):
+            for key, btn in tab_buttons.items():
+                btn.config(style="TabActive.TButton" if key == name else "Tab.TButton")
+            missed_page.pack_forget()
+            grades_page.pack_forget()
+            (missed_page if name == "missed" else grades_page).pack(fill="both", expand=True)
+
+        for key, title in (("missed", "Пропуски"), ("grades", "Оценки")):
+            btn = ttk.Button(tabs_bar, text=title, cursor="hand2", style="Tab.TButton",
+                             command=lambda k=key: show_tab(k))
+            btn.pack(side="left")
+            tab_buttons[key] = btn
+
         # --- Дата, до которой учитываем занятия (выбирается календарём) ---
         last_date = repository.get_last_graded_date()
         initial_date = iso_to_date(last_date) or date_cls.today()
 
-        date_row = ttk.Frame(container)
+        date_row = ttk.Frame(missed_page)
         date_row.pack(fill="x", pady=(0, 12))
         ttk.Label(date_row, text="Учитывать занятия до:").pack(side="left")
 
@@ -422,10 +452,10 @@ class StudentsPage:
                   style="Hint.TLabel").pack(side="left", padx=12)
 
         # --- Таблица пропущенных занятий ---
-        lessons_card, lessons_title = self._table_card(container, "Пропущенные занятия")
+        lessons_card, lessons_title = self._table_card(missed_page, "Пропущенные занятия")
         lessons_table = self._build_activity_table(
             lessons_card, (("date", "Дата", 100, "center"), ("name", "Занятие", 110, "center"),
-                           ("topic", "Тема", 600, "w")), height=12)
+                           ("topic", "Тема", 600, "w")), height=10)
 
         def fill(_event=None):
             try:
@@ -447,8 +477,66 @@ class StudentsPage:
         date_picker.bind("<Return>", fill)
         date_picker.bind("<FocusOut>", fill)
 
-        ttk.Button(container, text="Закрыть", style="Secondary.TButton", cursor="hand2",
-                   command=win.destroy).pack(pady=(14, 0), anchor="e")
+        # --- Вкладка «Оценки»: оценки студента из файла + итоги периодов ---
+        grades_all = repository.get_student_grades(student_id)
+        graded_total = sum(1 for r in grades_all if r["kind"] == "work"
+                           and (r["ball"] is not None or r["raw"] is not None))
+
+        filter_row = ttk.Frame(grades_page)
+        filter_row.pack(fill="x", pady=(0, 12))
+        ttk.Label(filter_row, text="Показать:").pack(side="left")
+        grades_filter = tk.StringVar(value=GRADE_FILTERS[0])
+        filter_box = ttk.Combobox(filter_row, textvariable=grades_filter, values=GRADE_FILTERS,
+                                  state="readonly", width=24)
+        filter_box.pack(side="left", padx=10)
+        ttk.Label(filter_row, text="итог периода считается по сумме баллов, как на вкладке «Контрольные»",
+                  style="Hint.TLabel").pack(side="left", padx=12)
+
+        grades_card, grades_title = self._table_card(grades_page, "Оценки")
+        grades_table = self._build_activity_table(
+            grades_card, (("date", "Дата", 90, "center"), ("name", "Занятие", 150, "center"),
+                          ("topic", "Тема", 420, "w"), ("ball", "Балл", 70, "center"),
+                          ("mark", "Оценка", 80, "center")), height=10)
+        # Пустые занятия — приглушённым цветом, итоги периодов — цветной строкой
+        for stripe, bg in (("odd", p["surface"]), ("even", p["surface_alt"])):
+            grades_table.tag_configure(f"empty_{stripe}", background=bg, foreground=p["muted"])
+        bold = (FONT_FAMILY, 10, "bold")
+        grades_table.tag_configure("period", background=p["accent_soft"],
+                                   foreground=p["text"], font=bold)
+        grades_table.tag_configure("period_low", background=p["low_bg"],
+                                   foreground=p["low_fg"], font=bold)
+
+        def fill_grades(_event=None):
+            mode = grades_filter.get()
+            grades_table.delete(*grades_table.get_children())
+            n = 0  # номер вставленной строки — для чередования фона
+            for r in grades_all:
+                if r["kind"] == "period":
+                    held = r["held"]
+                    grades_table.insert(
+                        "", "end", tags=("period_low" if r["grade"] == 2 else "period",),
+                        values=(iso_to_display(r["date"]), f"Итог периода {r['period']}",
+                                "Сумма баллов за период" if held
+                                else "Контрольную ещё никто не писал",
+                                fmt_number(r["total"]) if held else "—",
+                                r["grade"] if r["grade"] is not None else "—"))
+                    n += 1
+                    continue
+                has_grade = r["ball"] is not None or r["raw"] is not None
+                if mode == GRADE_FILTERS[2] or (mode == GRADE_FILTERS[0] and not has_grade):
+                    continue
+                stripe = "even" if n % 2 else "odd"
+                value = fmt_number(r["ball"]) if r["ball"] is not None else (r["raw"] or "—")
+                name = f"Урок {r['name']}" if r["name"].isdigit() else r["name"]
+                grades_table.insert("", "end", tags=(stripe if has_grade else f"empty_{stripe}",),
+                                    values=(iso_to_display(r["date"]), name, r["tema"] or "",
+                                            value, ""))
+                n += 1
+            grades_title.config(text=f"Оценки студента (выставлено: {graded_total})")
+
+        filter_box.bind("<<ComboboxSelected>>", fill_grades)
+        fill_grades()
+        show_tab("missed")
         fill()
 
     @staticmethod

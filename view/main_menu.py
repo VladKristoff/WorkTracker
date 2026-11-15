@@ -4,7 +4,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
-from PIL import Image, ImageTk
+from PIL import Image, ImageOps, ImageTk
 
 from config import ICON_PATH
 from database.repository import database_has_data
@@ -13,11 +13,15 @@ from utils.settings import load_settings, save_setting
 
 
 class MainMenu:
+    LOGO_SIZE = 88
+
     def __init__(self, main_frame, app):
         self.main_frame = main_frame
         self.app = app
         self.result_queue = queue.Queue()
         self.is_loading = False
+        self.logo_label = None
+        self.logo_img = None
 
         self.create_widgets()
 
@@ -38,12 +42,11 @@ class MainMenu:
         card = ttk.Frame(self.main_frame, style="Card.TFrame", padding=(64, 44))
         card.place(relx=0.5, rely=0.5, anchor="center")
 
-        try:
-            pil_img = Image.open(ICON_PATH).resize((88, 88), Image.Resampling.LANCZOS)
-            self.logo_img = ImageTk.PhotoImage(pil_img)
-            ttk.Label(card, image=self.logo_img, style="Card.TLabel").pack()
-        except (OSError, FileNotFoundError):
-            pass  # без логотипа меню остаётся рабочим
+        logo = self._make_logo()
+        if logo is not None:
+            self.logo_img = logo
+            self.logo_label = ttk.Label(card, image=self.logo_img, style="Card.TLabel")
+            self.logo_label.pack()
 
         ttk.Label(card, text="Work Tracking", style="BigLabel.TLabel").pack(pady=(12, 0))
         ttk.Label(card, text="Успеваемость студентов — наглядно",
@@ -86,6 +89,25 @@ class MainMenu:
     # Оформление
     # ------------------------------------------------------------------
 
+    def _make_logo(self):
+        """
+        Логотип, перекрашенный в акцентный цвет текущей темы: форма берётся из прозрачности
+        исходного PNG, цвет — из палитры. Так он виден и на светлой, и на тёмной карточке.
+        """
+        try:
+            size = (self.LOGO_SIZE, self.LOGO_SIZE)
+            img = Image.open(ICON_PATH).convert("RGBA").resize(size, Image.Resampling.LANCZOS)
+        except (OSError, FileNotFoundError):
+            return None  # без логотипа меню остаётся рабочим
+
+        mask = img.getchannel("A")
+        if mask.getextrema() == (255, 255):
+            # PNG без прозрачности (тёмный значок на светлом фоне): маска — затемнённость пикселя
+            mask = ImageOps.invert(img.convert("L"))
+        tinted = Image.new("RGBA", size, self.app.palette["accent"])
+        tinted.putalpha(mask)
+        return ImageTk.PhotoImage(tinted)
+
     def _draw_background(self):
         p = self.app.palette
         c = self.bg_canvas
@@ -100,6 +122,11 @@ class MainMenu:
         self.bg_canvas.configure(bg=self.app.palette["bg"])
         self._draw_background()
         self.theme_btn.config(text=self.app.theme_icon)
+        if self.logo_label is not None:
+            logo = self._make_logo()
+            if logo is not None:
+                self.logo_img = logo  # ссылку нужно держать, иначе Tk потеряет картинку
+                self.logo_label.config(image=self.logo_img)
 
     # ------------------------------------------------------------------
 

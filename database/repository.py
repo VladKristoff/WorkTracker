@@ -248,3 +248,44 @@ def get_control_report() -> list:
                                "date": control["data"], "control": ctrl,
                                "total": round(total, 2), "grade": grade, "reasons": reasons})
     return result
+
+
+def get_student_grades(student_id: int) -> list:
+    """
+    Оценки одного студента для вкладки «Оценки» в окне «Подробнее».
+    Строки идут в порядке столбцов файла. Два вида:
+      {"kind": "work",   "date", "name", "tema", "tip", "ball", "raw"}
+      {"kind": "period", "period", "date", "total", "grade", "held"}
+    Строка «period» вставляется после занятий своего периода (периоды и оценка считаются
+    так же, как в get_control_report). ball=None и raw=None — оценки нет.
+    """
+    with db_session() as conn:
+        activities = conn.execute(
+            "SELECT id, nazvanie, tip, data, tema FROM Activities ORDER BY id").fetchall()
+        mine = {r["activity_id"]: (r["poluchenny_ball"], r["raw_value"])
+                for r in conn.execute(
+                    "SELECT activity_id, poluchenny_ball, raw_value FROM Grades "
+                    "WHERE student_id = ?", (student_id,))}
+        # занятия, по которым оценка выставлена хоть кому-то
+        held_ids = {r[0] for r in conn.execute(
+            "SELECT DISTINCT activity_id FROM Grades WHERE poluchenny_ball IS NOT NULL")}
+
+    rows, block, period_no = [], [], 0
+    for a in activities:
+        ball, raw = mine.get(a["id"], (None, None))
+        if a["tip"] == "Оценка":
+            if block:
+                period_no += 1
+                control = block[-1]
+                total = sum(mine.get(b["id"], (None, None))[0] or 0 for b in block)
+                held = control["id"] in held_ids  # контрольную писал хоть кто-то
+                rows.append({"kind": "period", "period": period_no, "date": control["data"],
+                             "total": round(total, 2),
+                             "grade": period_grade(total) if held else None, "held": held})
+            block = []
+            continue
+        if a["tip"] == LESSON_TYPE:
+            block.append(a)
+        rows.append({"kind": "work", "date": a["data"], "name": a["nazvanie"],
+                     "tema": a["tema"], "tip": a["tip"], "ball": ball, "raw": raw})
+    return rows

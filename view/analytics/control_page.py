@@ -77,9 +77,10 @@ class ControlPage:
         self._build_table(content)
 
     @staticmethod
-    def _card(parent, title, pady=(0, 14)):
+    def _card(parent, title, pady=(0, 14), expand=False):
         card = ttk.Frame(parent, style="Card.TFrame", padding=16)
-        card.pack(fill="x", pady=pady)
+        # expand=True растягивает карточку до низа панели — низ панели совпадает с низом таблицы
+        card.pack(fill="both" if expand else "x", expand=expand, pady=pady)
         ttk.Label(card, text=title, style="CardTitle.TLabel").pack(anchor="w", pady=(0, 10))
         return card
 
@@ -109,7 +110,7 @@ class ControlPage:
         self.no_ctrl_label = self._tile(grid, 1, 0, "Не писали")
         self.two_label = self._tile(grid, 1, 1, "Оценка 2")
 
-        legend = self._card(panel, "Подсветка")
+        legend = self._card(panel, "Подсветка", pady=0, expand=True)
         for bg_key, fg_key, text in (("low_bg", "low_fg", "оценка 2"),
                                      ("warn_bg", "warn_fg", "не писал, но оценка выше 2")):
             row = ttk.Frame(legend, style="Surface.TFrame")

@@ -3,76 +3,91 @@ from tkinter import ttk
 from config import FONT_FAMILY
 
 # ----------------------------------------------------------------------
-# Палитры. Тёмная тема — те же акценты (Indigo & Mint), но на глубоком синем фоне.
+# Палитры.
+# Светлая: индиго + голубовато-лавандовый фон, цветные карточки и насыщенная шапка.
+# Тёмная: нейтральный графит/чёрный без зелёных и синих оттенков, один холодный акцент.
+# Все прежние ключи сохранены, поэтому остальной код менять не нужно.
 # ----------------------------------------------------------------------
 PALETTES = {
     "light": {
-        "bg": "#F3F5FB",          # фон окна
-        "surface": "#FFFFFF",     # карточки
-        "surface_alt": "#F8FAFC",  # полосатые строки, шапка таблицы
-        "header": "#FFFFFF",
-        "border": "#E2E8F0",
-        "text": "#0F172A",
-        "muted": "#64748B",
+        "bg": "#D9E0F5",           # фон окна — насыщенный лавандово-голубой
+        "surface": "#F4F6FF",      # карточки — слегка подкрашенные, не чисто белые
+        "surface_alt": "#E6EBFC",  # полосатые строки, шапка таблицы
+        "header": "#312E81",       # шапка — глубокий индиго
+        "header_fg": "#FFFFFF",
+        "header_hover": "#4338CA",
+        "header_press": "#4F46E5",
+        "header_tab": "#27256B",   # «дорожка» вкладок в шапке
+        "header_tab_fg": "#C7D2FE",
+        "border": "#AEB9E6",
+        "text": "#14183B",
+        "muted": "#5B6490",
         "accent": "#4F46E5",
         "accent_hover": "#4338CA",
         "accent_active": "#312E81",
         "on_accent": "#FFFFFF",
-        "accent_soft": "#E0E7FF",
-        "mint": "#10B981",
+        "accent_soft": "#C7D2FE",
+        "mint": "#0D9488",
         "input_bg": "#FFFFFF",
-        "btn2": "#EEF2F7",
-        "btn2_hover": "#E2E8F0",
-        "btn2_active": "#CBD5E1",
-        "disabled_bg": "#D5DAE5",
-        "disabled_fg": "#F8FAFC",
-        "scroll": "#CBD5E1",
-        "scroll_hover": "#94A3B8",
-        "select_bg": "#E0E7FF",
+        "btn2": "#CBD5F3",
+        "btn2_hover": "#B9C5EC",
+        "btn2_active": "#A5B3E4",
+        "disabled_bg": "#C3CBE6",
+        "disabled_fg": "#EEF1FC",
+        "scroll": "#A5B3E4",
+        "scroll_hover": "#7F8FD3",
+        "select_bg": "#C7D2FE",
         "select_fg": "#1E1B4B",
-        "low_bg": "#FEE2E2",
+        "low_bg": "#FECACA",       # красная подсветка
         "low_fg": "#991B1B",
-        "warn_bg": "#FEF3C7",
-        "warn_fg": "#92400E",
-        "worst_bg": "#FFE4E6",
-        "worst_fg": "#9F1239",
-        "deco1": "#E4E8FB",
-        "deco2": "#D9F5EA",
+        "warn_bg": "#FDE68A",      # янтарная подсветка
+        "warn_fg": "#78350F",
+        "worst_bg": "#FBCFE8",     # розовая подсветка
+        "worst_fg": "#9D174D",
+        "deco1": "#C3CDF2",
+        "deco2": "#F0CFF5",
     },
     "dark": {
-        "bg": "#0E1120",
-        "surface": "#171B2D",
-        "surface_alt": "#1C2136",
-        "header": "#171B2D",
-        "border": "#2A3050",
-        "text": "#E8EAF6",
-        "muted": "#8F96B8",
-        "accent": "#6366F1",
-        "accent_hover": "#7C7FF7",
-        "accent_active": "#4F46E5",
-        "on_accent": "#FFFFFF",
-        "accent_soft": "#2B2F5C",
-        "mint": "#34D399",
-        "input_bg": "#10142A",
-        "btn2": "#232843",
-        "btn2_hover": "#2C3254",
-        "btn2_active": "#383F68",
-        "disabled_bg": "#262B45",
-        "disabled_fg": "#5B6285",
-        "scroll": "#3A4166",
-        "scroll_hover": "#4C5585",
-        "select_bg": "#33377A",
+        "bg": "#121214",
+        "surface": "#1C1C1F",
+        "surface_alt": "#232327",
+        "header": "#09090B",
+        "header_fg": "#F2F2F4",
+        "header_hover": "#222226",
+        "header_press": "#2E2E33",
+        "header_tab": "#1A1A1D",
+        "header_tab_fg": "#9A9AA3",
+        "border": "#303035",
+        "text": "#ECECEF",
+        "muted": "#9A9AA3",
+        "accent": "#7C86FF",
+        "accent_hover": "#939BFF",
+        "accent_active": "#6670F0",
+        "on_accent": "#0B0B10",
+        "accent_soft": "#2D2F45",
+        "mint": "#A3A3AD",
+        "input_bg": "#141416",
+        "btn2": "#2A2A2F",
+        "btn2_hover": "#34343A",
+        "btn2_active": "#40404A",
+        "disabled_bg": "#26262A",
+        "disabled_fg": "#5E5E67",
+        "scroll": "#3D3D44",
+        "scroll_hover": "#55555E",
+        "select_bg": "#33364F",
         "select_fg": "#FFFFFF",
-        "low_bg": "#3F1D2B",
+        "low_bg": "#3D1F24",
         "low_fg": "#FCA5A5",
-        "warn_bg": "#3D3217",
+        "warn_bg": "#3A301A",
         "warn_fg": "#FCD34D",
-        "worst_bg": "#4C1D2E",
+        "worst_bg": "#47202F",
         "worst_fg": "#FDA4AF",
-        "deco1": "#161B3A",
-        "deco2": "#0F2C2B",
+        "deco1": "#18181B",
+        "deco2": "#1F1F23",
     },
 }
+
+ROW_HEIGHT = 30  # высота строки таблиц (было 38) — компактнее, влезает больше студентов
 
 
 def configure_tree_tags(tree, p):
@@ -126,26 +141,44 @@ def set_styles(root, theme="light"):
     # --- Надписи ---
     style.configure("TLabel", background=p["bg"], foreground=p["text"])
     style.configure("Card.TLabel", background=p["surface"])
-    style.configure("CardTitle.TLabel", background=p["surface"], font=(F, 11, "bold"))
+    style.configure("CardTitle.TLabel", background=p["surface"], font=(F, 10, "bold"))
     style.configure("CardHint.TLabel", background=p["surface"], foreground=p["muted"],
                     font=(F, 9))
     style.configure("Value.TLabel", background=p["surface"], foreground=p["accent"],
-                    font=(F, 22, "bold"))
-    style.configure("Name.TLabel", background=p["surface"], font=(F, 16, "bold"))
+                    font=(F, 18, "bold"))
+    style.configure("Name.TLabel", background=p["surface"], font=(F, 15, "bold"))
     style.configure("Subtitle.TLabel", background=p["surface"], foreground=p["muted"],
-                    font=(F, 11))
-    style.configure("Header.TLabel", background=p["header"], font=(F, 13, "bold"))
+                    font=(F, 10))
+    style.configure("Header.TLabel", background=p["header"], foreground=p["header_fg"],
+                    font=(F, 12, "bold"))
     style.configure("BigLabel.TLabel", background=p["surface"], foreground=p["accent"],
-                    font=(F, 34, "bold"))
-    style.configure("SmallLabel.TLabel", background=p["bg"], font=(F, 12, "bold"))
+                    font=(F, 30, "bold"))
+    style.configure("SmallLabel.TLabel", background=p["bg"], font=(F, 11, "bold"))
     style.configure("Hint.TLabel", background=p["bg"], foreground=p["muted"], font=(F, 9))
 
     # --- Поля ввода ---
     focus = [("focus", p["accent"])]
     style.configure("TEntry", fieldbackground=p["input_bg"], foreground=p["text"],
-                    insertcolor=p["text"], padding=(10, 8), borderwidth=1,
+                    insertcolor=p["text"], padding=(8, 5), borderwidth=1,
                     bordercolor=p["border"], lightcolor=p["border"], darkcolor=p["border"])
     style.map("TEntry", bordercolor=focus, lightcolor=focus, darkcolor=focus)
+
+    style.configure("TCombobox", fieldbackground=p["input_bg"], background=p["btn2"],
+                    foreground=p["text"], arrowcolor=p["muted"], insertcolor=p["text"],
+                    padding=(8, 5), borderwidth=1, bordercolor=p["border"],
+                    lightcolor=p["border"], darkcolor=p["border"])
+    style.map("TCombobox",
+              fieldbackground=[("readonly", p["input_bg"])],
+              foreground=[("readonly", p["text"])],
+              background=[("active", p["btn2_hover"]), ("readonly", p["btn2"])],
+              bordercolor=focus, lightcolor=focus, darkcolor=focus,
+              arrowcolor=[("active", p["accent"])])
+    # Выпадающий список комбобокса — обычный tk.Listbox, красим через option database
+    root.option_add("*TCombobox*Listbox.background", p["input_bg"])
+    root.option_add("*TCombobox*Listbox.foreground", p["text"])
+    root.option_add("*TCombobox*Listbox.selectBackground", p["accent"])
+    root.option_add("*TCombobox*Listbox.selectForeground", p["on_accent"])
+    root.option_add("*TCombobox*Listbox.font", (F, 10))
 
     # --- Флажки на карточках ---
     style.configure("Card.TCheckbutton", background=p["surface"], foreground=p["text"],
@@ -157,17 +190,17 @@ def set_styles(root, theme="light"):
 
     # --- Таблицы ---
     style.configure("Treeview", background=p["surface"], fieldbackground=p["surface"],
-                    foreground=p["text"], rowheight=38, borderwidth=0, relief="flat",
+                    foreground=p["text"], rowheight=ROW_HEIGHT, borderwidth=0, relief="flat",
                     font=(F, 10))
     style.layout("Treeview", [("Treeview.treearea", {"sticky": "nswe"})])  # без рамки
     style.map("Treeview", background=[("selected", p["select_bg"])],
               foreground=[("selected", p["select_fg"])])
-    style.configure("Treeview.Heading", background=p["surface_alt"], foreground=p["muted"],
-                    font=(F, 10, "bold"), relief="flat", padding=(12, 10), borderwidth=1,
-                    bordercolor=p["border"], lightcolor=p["surface_alt"],
-                    darkcolor=p["surface_alt"])
-    style.map("Treeview.Heading", background=[("active", p["accent_soft"])],
-              foreground=[("active", p["accent"])])
+    style.configure("Treeview.Heading", background=p["accent_soft"], foreground=p["text"],
+                    font=(F, 10, "bold"), relief="flat", padding=(10, 7), borderwidth=1,
+                    bordercolor=p["border"], lightcolor=p["accent_soft"],
+                    darkcolor=p["accent_soft"])
+    style.map("Treeview.Heading", background=[("active", p["accent"])],
+              foreground=[("active", p["on_accent"])])
 
     # --- Полоса прокрутки: тонкая, без стрелок ---
     style.layout("Vertical.TScrollbar", [
@@ -187,36 +220,40 @@ def set_styles(root, theme="light"):
     # --- Кнопки ---
     primary = dict(bg=p["accent"], hover=p["accent_hover"], pressed=p["accent_active"],
                    fg=p["on_accent"], disabled_bg=p["disabled_bg"], disabled_fg=p["disabled_fg"])
-    _button(style, "BlueButton.TButton", font=(F, 12, "bold"), padding=(28, 14), width=22, **primary)
-    _button(style, "MainButton.TButton", font=(F, 11, "bold"), padding=(18, 12), **primary)
+    _button(style, "BlueButton.TButton", font=(F, 11, "bold"), padding=(24, 11), width=22, **primary)
+    _button(style, "MainButton.TButton", font=(F, 10, "bold"), padding=(14, 8), **primary)
 
     secondary = dict(bg=p["btn2"], hover=p["btn2_hover"], pressed=p["btn2_active"],
                      fg=p["text"], disabled_bg=p["btn2"], disabled_fg=p["disabled_fg"])
-    _button(style, "Secondary.TButton", font=(F, 10, "bold"), padding=(14, 9), **secondary)
+    _button(style, "Secondary.TButton", font=(F, 10, "bold"), padding=(12, 7), **secondary)
+    _button(style, "TButton", font=(F, 10), padding=(12, 7), **secondary)
 
-    # «Призрачные» кнопки: на фоне окна и на фоне шапки
-    for name, base in (("Ghost.TButton", p["bg"]), ("HeaderGhost.TButton", p["header"])):
-        _button(style, name, bg=base, hover=p["btn2_hover"], pressed=p["btn2_active"],
-                fg=p["text"], disabled_bg=base, disabled_fg=p["disabled_fg"],
-                font=(F, 11, "bold"), padding=(12, 8))
+    # «Призрачные» кнопки: на фоне окна и на фоне цветной шапки
+    _button(style, "Ghost.TButton", bg=p["bg"], hover=p["btn2_hover"], pressed=p["btn2_active"],
+            fg=p["text"], disabled_bg=p["bg"], disabled_fg=p["disabled_fg"],
+            font=(F, 10, "bold"), padding=(10, 6))
+    _button(style, "HeaderGhost.TButton", bg=p["header"], hover=p["header_hover"],
+            pressed=p["header_press"], fg=p["header_fg"], disabled_bg=p["header"],
+            disabled_fg=p["header_tab_fg"], font=(F, 10, "bold"), padding=(10, 6))
     style.configure("ArrowButton.TButton", font=(F, 12, "bold"))  # совместимость со старым кодом
 
-    # --- Вкладки в шапке: сегментированный переключатель (таблетка) ---
-    style.configure("TabsBar.TFrame", background=p["btn2"], relief="solid", borderwidth=1,
-                    bordercolor=p["border"], lightcolor=p["border"], darkcolor=p["border"])
+    # --- Вкладки в шапке: сегментированный переключатель ---
+    style.configure("TabsBar.TFrame", background=p["header_tab"], relief="flat", borderwidth=0)
     _button(style, "TabActive.TButton", bg=p["surface"], hover=p["surface"], pressed=p["surface"],
             fg=p["accent"], disabled_bg=p["surface"], disabled_fg=p["disabled_fg"],
-            font=(F, 10, "bold"), padding=(20, 9))
-    _button(style, "Tab.TButton", bg=p["btn2"], hover=p["btn2_hover"], pressed=p["btn2_active"],
-            fg=p["muted"], disabled_bg=p["btn2"], disabled_fg=p["disabled_fg"],
-            font=(F, 10, "bold"), padding=(20, 9))
+            font=(F, 10, "bold"), padding=(16, 6))
+    _button(style, "Tab.TButton", bg=p["header_tab"], hover=p["header_hover"],
+            pressed=p["header_press"], fg=p["header_tab_fg"], fg_pressed=p["header_fg"],
+            disabled_bg=p["header_tab"], disabled_fg=p["disabled_fg"],
+            font=(F, 10, "bold"), padding=(16, 6))
+    style.map("Tab.TButton", foreground=[("active", p["header_fg"])])
 
     # --- Пункты списка диаграмм (боковая панель) ---
     _button(style, "ChartItemActive.TButton", bg=p["accent_soft"], hover=p["accent_soft"],
             pressed=p["accent_soft"], fg=p["accent"], disabled_bg=p["accent_soft"],
-            disabled_fg=p["disabled_fg"], font=(F, 10, "bold"), padding=(12, 10))
+            disabled_fg=p["disabled_fg"], font=(F, 10, "bold"), padding=(10, 8))
     _button(style, "ChartItem.TButton", bg=p["surface"], hover=p["surface_alt"],
             pressed=p["surface_alt"], fg=p["text"], disabled_bg=p["surface"],
-            disabled_fg=p["disabled_fg"], font=(F, 10), padding=(12, 10))
+            disabled_fg=p["disabled_fg"], font=(F, 10), padding=(10, 8))
 
     return p

@@ -134,7 +134,7 @@ class VisualizationPage:
 
         # --- Сводка (зависит от выбранной диаграммы) ---
         stats = ttk.Frame(panel, style="Card.TFrame", padding=16)
-        stats.pack(fill="x", pady=(0, 14))
+        stats.pack(fill="both", expand=True)  # занимает остаток — низ панели = низ диаграммы
         self.summary_title = ttk.Label(stats, text="Сводка", style="CardTitle.TLabel")
         self.summary_title.pack(anchor="w", pady=(0, 10))
         self.best_label, self.best_caption = self._stat(stats, "")
