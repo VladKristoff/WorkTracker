@@ -1,13 +1,15 @@
 import os
 import sys
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, "frozen", False):                     # запущено из .exe
+    RESOURCE_DIR = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+    DATA_DIR = os.path.dirname(sys.executable)        # рядом с exe
+else:
+    RESOURCE_DIR = DATA_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# База данных хранится рядом с программой, независимо от текущей папки запуска
-DB_PATH = os.path.join(BASE_DIR, "university.db")
-ICON_PATH = os.path.join(BASE_DIR, "images", "app_ico.png")
-# Файл с настройками (путь к последнему открытому xlsx)
-SETTINGS_PATH = os.path.join(BASE_DIR, "settings.json")
+DB_PATH = os.path.join(DATA_DIR, "university.db")
+SETTINGS_PATH = os.path.join(DATA_DIR, "settings.json")
+ICON_PATH = os.path.join(RESOURCE_DIR, "images", "app_ico.png")
 
 APP_TITLE = "Work Tracking"
 WINDOW_SIZE = (1440, 800)
