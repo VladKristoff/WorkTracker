@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 *.db
 *.db.tmp
+build/
+dist/
+settings.json
