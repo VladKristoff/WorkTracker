@@ -48,7 +48,7 @@ class MainMenu:
             self.logo_label = ttk.Label(card, image=self.logo_img, style="Card.TLabel")
             self.logo_label.pack()
 
-        ttk.Label(card, text="Work Tracking", style="BigLabel.TLabel").pack(pady=(12, 0))
+        ttk.Label(card, text="Work Tracker", style="BigLabel.TLabel").pack(pady=(12, 0))
         ttk.Label(card, text="Успеваемость студентов — наглядно",
                   style="Subtitle.TLabel").pack(pady=(2, 32))
 

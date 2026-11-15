@@ -11,7 +11,7 @@ DB_PATH = os.path.join(DATA_DIR, "university.db")
 SETTINGS_PATH = os.path.join(DATA_DIR, "settings.json")
 ICON_PATH = os.path.join(RESOURCE_DIR, "images", "app_ico.png")
 
-APP_TITLE = "Work Tracking"
+APP_TITLE = "Work Tracker"
 WINDOW_SIZE = (1440, 800)
 MIN_WINDOW_SIZE = (1100, 650)
 
