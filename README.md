@@ -94,8 +94,3 @@
 - **OpenPyXL** — работа с Excel-файлами.
 - **PyInstaller** — сборка приложения в исполняемый файл.
 
-## Автор
-
-**VladKristoff**
-
-GitHub: [@VladKristoff](https://github.com/VladKristoff)
