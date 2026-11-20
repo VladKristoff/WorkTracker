@@ -5,6 +5,7 @@
 Шрифт с кириллицей берётся из системы (Segoe UI / Arial в Windows, DejaVu / Liberation в Linux),
 отдельный файл шрифта в проект добавлять не нужно.
 """
+import math
 import os
 from datetime import datetime
 
@@ -15,8 +16,8 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import (Paragraph, SimpleDocTemplate, Spacer, Table,
-                                TableStyle)
+from reportlab.platypus import (Flowable, KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer,
+                                Table, TableStyle)
 
 from utils.dates import iso_to_display
 
@@ -92,7 +93,10 @@ def _styles():
 
 def _stat_tiles(st, items, width):
     """Строка плиток «значение + подпись»."""
-    cells = [[Paragraph(_esc(v), st["tile_v"]), Paragraph(_esc(c), st["tile_c"])] for v, c in items]
+    lines = max(c.count("\n") for _, c in items)  # подписи выравниваем по числу строк
+    items = [(v, c + "\n\u00a0" * (lines - c.count("\n"))) for v, c in items]
+    cells = [[Paragraph(_esc(v), st["tile_v"]), Paragraph(_esc(c).replace("\n", "<br/>"), st["tile_c"])]
+             for v, c in items]
     # Каждая плитка — своя маленькая таблица, чтобы у неё была рамка
     tiles = []
     for value, caption in cells:
@@ -129,6 +133,30 @@ def _data_table(header, rows, col_widths, align_left_cols, st, extra_styles=()):
     return table
 
 
+PAGE_W, PAGE_H = A4
+MARGIN = 16 * mm
+
+
+def _build_doc(path, title, story):
+    """Собирает документ A4 с общим колонтитулом (дата формирования и номер страницы)."""
+    generated = datetime.now().strftime("%d.%m.%Y %H:%M")
+
+    def footer(canvas, doc):
+        canvas.saveState()
+        canvas.setFont(FONT, 8)
+        canvas.setFillColor(MUTED)
+        canvas.drawString(MARGIN, 10 * mm, f"Work Tracking · сформировано {generated}")
+        canvas.drawRightString(PAGE_W - MARGIN, 10 * mm, f"Стр. {doc.page}")
+        canvas.setStrokeColor(BORDER)
+        canvas.line(MARGIN, 14 * mm, PAGE_W - MARGIN, 14 * mm)
+        canvas.restoreState()
+
+    doc = SimpleDocTemplate(path, pagesize=A4, leftMargin=MARGIN, rightMargin=MARGIN,
+                            topMargin=16 * mm, bottomMargin=20 * mm,
+                            title=title, author="Work Tracking")
+    doc.build(story, onFirstPage=footer, onLaterPages=footer)
+
+
 def build_student_card_pdf(path, student, rank, total_students, up_to_iso, missed, grades):
     """
     Карточка студента: шапка с ключевыми цифрами, пропущенные занятия и оценки.
@@ -140,9 +168,7 @@ def build_student_card_pdf(path, student, rank, total_students, up_to_iso, misse
     """
     _register_fonts()
     st = _styles()
-    page_w, _ = A4
-    margin = 16 * mm
-    width = page_w - 2 * margin
+    width = PAGE_W - 2 * MARGIN
     fio = student["fio"]
 
     story = [Paragraph("КАРТОЧКА СТУДЕНТА", st["title"]), Spacer(1, 2),
@@ -207,19 +233,197 @@ def build_student_card_pdf(path, student, rank, total_students, up_to_iso, misse
     else:
         story.append(Paragraph("Оценок пока нет.", st["sub"]))
 
-    generated = datetime.now().strftime("%d.%m.%Y %H:%M")
+    _build_doc(path, f"Карточка студента — {fio}", story)
 
-    def footer(canvas, doc):
-        canvas.saveState()
-        canvas.setFont(FONT, 8)
-        canvas.setFillColor(MUTED)
-        canvas.drawString(margin, 10 * mm, f"Work Tracking · сформировано {generated}")
-        canvas.drawRightString(page_w - margin, 10 * mm, f"Стр. {doc.page}")
-        canvas.setStrokeColor(BORDER)
-        canvas.line(margin, 14 * mm, page_w - margin, 14 * mm)
-        canvas.restoreState()
 
-    doc = SimpleDocTemplate(path, pagesize=A4, leftMargin=margin, rightMargin=margin,
-                            topMargin=16 * mm, bottomMargin=20 * mm,
-                            title=f"Карточка студента — {fio}", author="Work Tracking")
-    doc.build(story, onFirstPage=footer, onLaterPages=footer)
+# ----------------------------------------------------------------------
+# Диаграммы (страница «Визуализация»)
+# ----------------------------------------------------------------------
+WARN_BG = colors.HexColor("#FEF3C7")
+WARN_FG = colors.HexColor("#92400E")
+FIRST_CHUNK, NEXT_CHUNK = 30, 40      # сколько строк помещается на первой / следующих страницах диаграммы
+ROW_H = 15.5                           # высота строки диаграммы, pt
+
+
+class _Legend(Flowable):
+    """Строка-легенда: образцы цветов столбцов."""
+
+    def __init__(self, items, width):
+        super().__init__()
+        self.items, self.width, self.height = items, width, 16
+
+    def wrap(self, avail_w, avail_h):
+        return self.width, self.height
+
+    def draw(self):
+        c, x = self.canv, 0
+        for kind, color, text in self.items:
+            if kind == "worst":
+                c.setFillColor(WARN_BG)
+                c.setStrokeColor(WARN_FG)
+                c.setLineWidth(1)
+                c.rect(x, 3, 14, 10, fill=1, stroke=1)
+            else:
+                c.setFillColor(color)
+                c.rect(x, 3, 14, 10, fill=1, stroke=0)
+            c.setFillColor(MUTED)
+            c.setFont(FONT, 8.5)
+            c.drawString(x + 19, 5.5, text)
+            x += 19 + pdfmetrics.stringWidth(text, FONT, 8.5) + 18
+
+
+class _BarChunk(Flowable):
+    """Горизонтальные столбцы для куска списка студентов; шкала общая для всех кусков."""
+
+    NAME_W = 46 * mm
+    VALUE_W = 14 * mm
+
+    def __init__(self, rows, width, y_max, step, bar_color, flag_color, average, avg_caption,
+                 first_index):
+        super().__init__()
+        self.rows, self.width = rows, width
+        self.y_max, self.step = y_max, step
+        self.bar_color, self.flag_color = bar_color, flag_color
+        self.average, self.avg_caption = average, avg_caption
+        self.first_index = first_index
+        self.top, self.bottom = 18, 22
+        self.height = self.top + len(rows) * ROW_H + self.bottom
+
+    def wrap(self, avail_w, avail_h):
+        return self.width, self.height
+
+    def draw(self):
+        c = self.canv
+        x0 = self.NAME_W
+        x1 = self.width - self.VALUE_W
+        scale = (x1 - x0) / self.y_max
+        base = self.bottom                       # y нижней границы области столбцов (ось y вверх)
+        area_top = base + len(self.rows) * ROW_H
+
+        # плашки «худших» под всем остальным
+        for i, r in enumerate(self.rows):
+            if r["worst"]:
+                y = area_top - (i + 1) * ROW_H
+                c.setFillColor(WARN_BG)
+                c.setStrokeColor(WARN_FG)
+                c.setLineWidth(0.8)
+                c.rect(0, y + 0.5, self.width, ROW_H - 1, fill=1, stroke=1)
+
+        # сетка и подписи шкалы сверху
+        c.setLineWidth(0.5)
+        for k in range(int(self.y_max // self.step) + 1):
+            value = k * self.step
+            x = x0 + value * scale
+            c.setStrokeColor(BORDER)
+            c.line(x, base, x, area_top + 3)
+            c.setFillColor(MUTED)
+            c.setFont(FONT, 7.5)
+            c.drawCentredString(x, area_top + 7, f"{value:g}")
+
+        # столбцы
+        bar_h = ROW_H * 0.62
+        for i, r in enumerate(self.rows):
+            cy = area_top - (i + 0.5) * ROW_H
+            worst = r["worst"]
+            w = max(1.5, r["value"] * scale)
+            c.setFillColor(self.flag_color if r["flagged"] else self.bar_color)
+            if worst:
+                c.setStrokeColor(WARN_FG)
+                c.setLineWidth(1)
+                c.rect(x0, cy - bar_h / 2, w, bar_h, fill=1, stroke=1)
+            else:
+                c.rect(x0, cy - bar_h / 2, w, bar_h, fill=1, stroke=0)
+
+            c.setFillColor(WARN_FG if worst else TEXT)
+            c.setFont(FONT_BOLD if worst else FONT, 8.5)
+            name_right = x0 - 6
+            c.drawRightString(name_right, cy - 3, r["name"])
+            if worst:  # маркер «▼» рисуем фигурой: в шрифтах Windows этого символа может не быть
+                tx = name_right - pdfmetrics.stringWidth(r["name"], FONT_BOLD, 8.5) - 9
+                p = c.beginPath()
+                p.moveTo(tx, cy + 2.5)
+                p.lineTo(tx + 6, cy + 2.5)
+                p.lineTo(tx + 3, cy - 2.5)
+                p.close()
+                c.setFillColor(WARN_FG)
+                c.drawPath(p, fill=1, stroke=0)
+            c.setFillColor(WARN_FG if worst else TEXT)
+            c.setFont(FONT_BOLD, 8.5)
+            c.drawString(x0 + r["value"] * scale + 4, cy - 3, f"{r['value']:g}")
+
+        # оси и линия среднего
+        c.setStrokeColor(MUTED)
+        c.setLineWidth(0.8)
+        c.line(x0, base, x0, area_top + 3)
+        c.line(x0, base, x1, base)
+        ax = x0 + self.average * scale
+        c.setDash(4, 3)
+        c.setLineWidth(1.2)
+        c.line(ax, base, ax, area_top + 3)
+        c.setDash()
+        c.setFillColor(MUTED)
+        c.setFont(FONT_BOLD, 8.5)
+        c.drawCentredString(ax, base - 12, f"{self.avg_caption} {round(self.average, 2):g}")
+
+
+def _chunks(rows):
+    """Делит строки на куски по страницам: первый короче (на странице есть шапка)."""
+    out, i, size = [], 0, FIRST_CHUNK
+    while i < len(rows):
+        out.append((i, rows[i:i + size]))
+        i += size
+        size = NEXT_CHUNK
+    return out
+
+
+def build_visualization_pdf(path, charts, subtitle=""):
+    """
+    Диаграммы страницы «Визуализация»: каждая диаграмма начинается с новой страницы,
+    длинный список студентов переносится на следующие страницы с той же шкалой.
+
+    charts — список словарей:
+      title, subtitle, summary [(значение, подпись)] (до 3 плиток),
+      rows [{"name", "value", "flagged", "worst"}] (уже в нужном порядке),
+      flag_text, flag_color (hex), worst_text, avg_caption, missing_note (или "").
+    """
+    _register_fonts()
+    st = _styles()
+    width = PAGE_W - 2 * MARGIN - 12   # минус внутренние отступы рамки страницы (по 6 pt)
+    story = []
+
+    for number, ch in enumerate(charts):
+        if number:
+            story.append(PageBreak())
+        story += [Paragraph("ВИЗУАЛИЗАЦИЯ УСПЕВАЕМОСТИ", st["title"]), Spacer(1, 2),
+                  Paragraph(_esc(ch["title"]), st["name"]), Spacer(1, 2),
+                  Paragraph(_esc(ch["subtitle"]), st["sub"])]
+        if subtitle:
+            story.append(Paragraph(_esc(subtitle), st["hint"]))
+        story.append(Spacer(1, 10))
+        if ch.get("summary"):
+            story += [_stat_tiles(st, ch["summary"], width), Spacer(1, 12)]
+
+        flag_color = colors.HexColor(ch["flag_color"])
+        story += [_Legend([("worst", None, ch["worst_text"]), ("bar", flag_color, ch["flag_text"]),
+                           ("bar", ACCENT, "остальные")], width), Spacer(1, 6)]
+
+        rows = ch["rows"]
+        if not rows:
+            story.append(Paragraph("Нет данных для диаграммы.", st["sub"]))
+            continue
+        max_val = max(r["value"] for r in rows)
+        step = max(1, math.ceil(max_val / 10))
+        y_max = max(step, math.ceil(max_val / step) * step)
+        average = sum(r["value"] for r in rows) / len(rows)
+        for first, part in _chunks(rows):
+            chunk = _BarChunk(part, width, y_max, step, ACCENT, flag_color, average,
+                              ch["avg_caption"], first)
+            if first:
+                story.append(KeepTogether([Paragraph(f"{_esc(ch['title'])} (продолжение)", st["h2"]),
+                                           Spacer(1, 6), chunk]))
+            else:
+                story.append(chunk)
+        if ch.get("missing_note"):
+            story += [Spacer(1, 4), Paragraph(_esc(ch["missing_note"]), st["hint"])]
+
+    _build_doc(path, "Визуализация успеваемости", story)

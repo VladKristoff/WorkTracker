@@ -2,14 +2,16 @@ import math
 import os
 import tkinter as tk
 import tkinter.font as tkfont
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 
 from config import FONT_FAMILY
 from database import repository
-from utils.settings import load_thresholds, save_setting
+from utils.pdf_export import build_visualization_pdf
+from utils.settings import load_settings, load_thresholds, save_setting
 from view.tabs import build_tabs
 
 WORST_COUNT = 5  # сколько худших по баллам выделяем всегда
+PDF_LOW_COLOR = "#991B1B"  # цвет столбцов с низким баллом на белой бумаге (как в светлой теме)
 
 
 def fmt_number(value):
@@ -141,6 +143,9 @@ class VisualizationPage:
         self.avg_label, self.avg_caption = self._stat(stats, "")
         self.low_label, self.low_caption = self._stat(stats, "")
 
+        ttk.Button(panel, text="Экспорт в PDF", cursor="hand2", style="MainButton.TButton",
+                   command=self.export_pdf).pack(fill="x")
+
     @staticmethod
     def _stat(parent, caption):
         value = ttk.Label(parent, text="—", style="Value.TLabel", font=(FONT_FAMILY, 16, "bold"))
@@ -252,30 +257,107 @@ class VisualizationPage:
     # Отрисовка
     # ------------------------------------------------------------------
 
+    def _chart_spec(self, key):
+        """Параметры диаграммы: общие для экрана и PDF."""
+        if key == "scores":
+            return dict(
+                title="Баллы студентов", subtitle="Итоговый балл каждого студента",
+                threshold=self.low_score, is_flagged=lambda v: v < self.low_score,
+                flag_text=f"ниже {fmt_number(self.low_score)}", avg_caption="средний балл",
+                empty_text="Нет итоговых баллов для диаграммы",
+                missing_text="Студентов без итогового балла (не показаны)",
+                flag_color=self.app.palette["low_fg"])
+        return dict(
+            title="Пропуски студентов",
+            subtitle="Количество пропущенных занятий каждого студента",
+            threshold=self.high_absences, is_flagged=lambda v: v > self.high_absences,
+            flag_text=f"больше {fmt_number(self.high_absences)}", avg_caption="в среднем",
+            empty_text="Нет данных о пропусках для диаграммы",
+            missing_text="Студентов без данных о пропусках (не показаны)",
+            flag_color=self.ABSENCE_COLORS[self.app.theme])
+
+    def _sorted_pairs(self, key):
+        """[(строка, значение)] в порядке, выбранном в «Сортировке»."""
+        pairs = self._values(key)
+        order = self.sort_var.get()
+        if order == "По убыванию":
+            pairs.sort(key=lambda d: -d[1])
+        elif order == "По возрастанию":
+            pairs.sort(key=lambda d: d[1])
+        return pairs
+
     def draw(self):
         c = self.canvas
         c.delete("all")
         w, h = c.winfo_width(), c.winfo_height()
         c.configure(scrollregion=(0, 0, w, h))
         c.yview_moveto(0)
-        if self.current_chart == "scores":
-            self.draw_bars(
-                c, key="scores", title="Баллы студентов",
-                subtitle="Итоговый балл каждого студента",
-                threshold=self.low_score, is_flagged=lambda v: v < self.low_score,
-                flag_text=f"ниже {fmt_number(self.low_score)}", avg_caption="средний балл",
-                empty_text="Нет итоговых баллов для диаграммы",
-                missing_text="Студентов без итогового балла (не показаны)",
-                flag_color=self.app.palette["low_fg"])
-        else:
-            self.draw_bars(
-                c, key="missed", title="Пропуски студентов",
-                subtitle="Количество пропущенных занятий каждого студента",
-                threshold=self.high_absences, is_flagged=lambda v: v > self.high_absences,
-                flag_text=f"больше {fmt_number(self.high_absences)}", avg_caption="в среднем",
-                empty_text="Нет данных о пропусках для диаграммы",
-                missing_text="Студентов без данных о пропусках (не показаны)",
-                flag_color=self.ABSENCE_COLORS[self.app.theme])
+        self.draw_bars(c, key=self.current_chart, **self._chart_spec(self.current_chart))
+
+    # ------------------------------------------------------------------
+    # Экспорт в PDF
+    # ------------------------------------------------------------------
+
+    def _pdf_charts(self):
+        """Данные обеих диаграмм для PDF — в том же порядке и с теми же порогами, что на экране."""
+        charts = []
+        for key in self.charts:
+            spec = self._chart_spec(key)
+            pairs = self._sorted_pairs(key)
+            data = self._values(key)
+            if key == "scores":
+                captions = ("Лучший результат", "Средний балл", "Ниже порога")
+            else:
+                captions = ("Больше всех пропусков", "Среднее пропусков", "Выше порога")
+            summary = []
+            if data:
+                best_row, best_val = max(data, key=lambda d: d[1])
+                avg = sum(v for _, v in data) / len(data)
+                flagged = sum(1 for _, v in data if spec["is_flagged"](v))
+                summary = [(fmt_number(best_val), f"{captions[0]}\n{short_name(best_row['fio'])}"),
+                           (fmt_number(avg), captions[1]),
+                           (f"{flagged} из {len(data)}", captions[2])]
+            missing = len(self._rows) - len(pairs)
+            charts.append({
+                "title": spec["title"], "subtitle": spec["subtitle"], "summary": summary,
+                "rows": [{"name": short_name(r["fio"]), "value": v,
+                          "flagged": spec["is_flagged"](v), "worst": r["id"] in self._worst_ids}
+                         for r, v in pairs],
+                "flag_text": spec["flag_text"], "flag_color": self.ABSENCE_COLORS["light"]
+                if key == "missed" else PDF_LOW_COLOR,
+                "worst_text": f"{WORST_COUNT} худших по баллам", "avg_caption": spec["avg_caption"],
+                "missing_note": f"{spec['missing_text']}: {missing}" if missing else ""})
+        return charts
+
+    def export_pdf(self):
+        last_dir = load_settings().get("last_pdf_dir")
+        path = filedialog.asksaveasfilename(
+            title="Сохранить диаграммы", defaultextension=".pdf",
+            filetypes=[("PDF файлы", "*.pdf")], initialfile="Визуализация_успеваемости.pdf",
+            initialdir=last_dir if last_dir and os.path.isdir(last_dir) else None)
+        if not path:
+            return
+        try:
+            build_visualization_pdf(
+                path, self._pdf_charts(),
+                subtitle=f"Сортировка: {self.sort_var.get().lower()} · "
+                         f"пороги: балл ниже {fmt_number(self.low_score)}, "
+                         f"пропусков больше {fmt_number(self.high_absences)}")
+        except PermissionError:
+            messagebox.showerror("Не удалось сохранить",
+                                 "Файл занят другой программой (возможно, открыт в просмотрщике PDF). "
+                                 "Закройте его или выберите другое имя.")
+            return
+        except Exception as e:
+            messagebox.showerror("Не удалось создать PDF", str(e))
+            return
+
+        save_setting("last_pdf_dir", os.path.dirname(path))
+        if messagebox.askyesno("PDF создан", f"Файл сохранён:\n{path}\n\nОткрыть его сейчас?"):
+            try:
+                os.startfile(path)  # type: ignore[attr-defined]  # только Windows
+            except (AttributeError, OSError):
+                pass
 
     def _title(self, c, title, subtitle):
         p = self.app.palette
@@ -309,17 +391,11 @@ class VisualizationPage:
                 c.create_rectangle(sx - 16, 26, sx, 42, fill=color, outline="")
             lx = sx - 16 - 22
 
-        pairs = self._values(key)
+        pairs = self._sorted_pairs(key)
         missing = len(self._rows) - len(pairs)
         if not pairs:
             c.create_text(w / 2, view_h / 2, text=empty_text, fill=p["muted"], font=(F, 12))
             return
-
-        order = self.sort_var.get()
-        if order == "По убыванию":
-            pairs.sort(key=lambda d: -d[1])
-        elif order == "По возрастанию":
-            pairs.sort(key=lambda d: d[1])
 
         n = len(pairs)
         top, bottom, left, right = 112, 56, 200, 70
