@@ -1,7 +1,7 @@
 import os
 import tkinter as tk
 from datetime import date as date_cls
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from typing import Literal
 
 from tkcalendar import DateEntry
@@ -10,7 +10,8 @@ from config import FONT_FAMILY
 from database import repository
 from styles import configure_tree_tags
 from utils.dates import iso_to_display, iso_to_date, date_to_iso
-from utils.settings import load_thresholds, save_setting
+from utils.pdf_export import build_student_card_pdf
+from utils.settings import load_settings, load_thresholds, save_setting
 from view.tabs import build_tabs
 
 
@@ -396,8 +397,13 @@ class StudentsPage:
         tabs_bar = ttk.Frame(container, style="TabsBar.TFrame", padding=3)
         tabs_bar.pack(anchor="w", pady=(0, 12))
         # Кнопка «Закрыть» упаковывается раньше тела окна, чтобы всегда оставаться видимой
-        ttk.Button(container, text="Закрыть", style="Secondary.TButton", cursor="hand2",
-                   command=win.destroy).pack(side="bottom", pady=(10, 0), anchor="e")
+        bottom_bar = ttk.Frame(container)
+        bottom_bar.pack(side="bottom", fill="x", pady=(10, 0))
+        ttk.Button(bottom_bar, text="Закрыть", style="Secondary.TButton", cursor="hand2",
+                   command=win.destroy).pack(side="right")
+        ttk.Button(bottom_bar, text="Экспорт в PDF", style="MainButton.TButton", cursor="hand2",
+                   command=lambda: self.export_student_pdf(win, student, rank, total,
+                                                           date_picker)).pack(side="right", padx=(0, 10))
         body = ttk.Frame(container)
         body.pack(fill="both", expand=True)
         missed_page = ttk.Frame(body)
@@ -538,6 +544,44 @@ class StudentsPage:
         fill_grades()
         show_tab("missed")
         fill()
+
+    def export_student_pdf(self, win, student, rank, total, date_picker):
+        """Сохраняет карточку студента в PDF: пропуски на выбранную дату и оценки."""
+        try:
+            up_to = date_to_iso(date_picker.get_date())
+        except Exception:
+            messagebox.showerror("Неверная дата", "Выберите дату в календаре.", parent=win)
+            return
+
+        last_dir = load_settings().get("last_pdf_dir")
+        name = "_".join(student["fio"].split()) + "_карточка.pdf"
+        path = filedialog.asksaveasfilename(
+            parent=win, title="Сохранить карточку студента", defaultextension=".pdf",
+            filetypes=[("PDF файлы", "*.pdf")], initialfile=name,
+            initialdir=last_dir if last_dir and os.path.isdir(last_dir) else None)
+        if not path:
+            return
+
+        try:
+            build_student_card_pdf(
+                path, student, rank, total, up_to,
+                repository.get_missed_lessons(student["id"], up_to),
+                repository.get_student_grades(student["id"]))
+        except PermissionError:
+            messagebox.showerror("Не удалось сохранить",
+                                 "Файл занят другой программой (возможно, открыт в просмотрщике PDF). "
+                                 "Закройте его или выберите другое имя.", parent=win)
+            return
+        except Exception as e:
+            messagebox.showerror("Не удалось создать PDF", str(e), parent=win)
+            return
+
+        save_setting("last_pdf_dir", os.path.dirname(path))
+        if messagebox.askyesno("PDF создан", f"Файл сохранён:\n{path}\n\nОткрыть его сейчас?", parent=win):
+            try:
+                os.startfile(path)  # type: ignore[attr-defined]  # только Windows
+            except (AttributeError, OSError):
+                pass
 
     @staticmethod
     def _table_card(parent, title):
