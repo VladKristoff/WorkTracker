@@ -101,7 +101,7 @@ class VisualizationPage:
 
         # --- Выбор диаграммы ---
         card = ttk.Frame(panel, style="Card.TFrame", padding=16)
-        card.pack(fill="x", pady=(0, 14))
+        card.pack(fill="x", pady=(0, 10))
         ttk.Label(card, text="Диаграммы", style="CardTitle.TLabel").pack(anchor="w", pady=(0, 10))
         for key, title in self.charts.items():
             btn = ttk.Button(card, text=title, cursor="hand2",
@@ -112,7 +112,7 @@ class VisualizationPage:
 
         # --- Сортировка ---
         sort_card = ttk.Frame(panel, style="Card.TFrame", padding=16)
-        sort_card.pack(fill="x", pady=(0, 14))
+        sort_card.pack(fill="x", pady=(0, 10))
         ttk.Label(sort_card, text="Сортировка", style="CardTitle.TLabel").pack(anchor="w", pady=(0, 10))
         combo = ttk.Combobox(sort_card, textvariable=self.sort_var, state="readonly",
                              values=self.SORT_VALUES)
@@ -121,7 +121,7 @@ class VisualizationPage:
 
         # --- Пороги подсветки ---
         thr_card = ttk.Frame(panel, style="Card.TFrame", padding=16)
-        thr_card.pack(fill="x", pady=(0, 14))
+        thr_card.pack(fill="x", pady=(0, 10))
         ttk.Label(thr_card, text="Подсветка", style="CardTitle.TLabel").pack(anchor="w", pady=(0, 10))
         for text, var in (("балл ниже", self.low_score_var),
                           ("пропусков больше", self.high_absences_var)):
@@ -135,6 +135,11 @@ class VisualizationPage:
                   style="CardHint.TLabel", wraplength=240, justify="left").pack(anchor="w", pady=(6, 0))
 
         # --- Сводка (зависит от выбранной диаграммы) ---
+        # Кнопка прижата к низу и упакована ДО карточки сводки: та забирает весь остаток,
+        # и кнопка, добавленная после неё, оказывалась обрезанной
+        ttk.Button(panel, text="Экспорт в PDF", cursor="hand2", style="MainButton.TButton",
+                   command=self.export_pdf).pack(side="bottom", fill="x", pady=(10, 0))
+
         stats = ttk.Frame(panel, style="Card.TFrame", padding=16)
         stats.pack(fill="both", expand=True)  # занимает остаток — низ панели = низ диаграммы
         self.summary_title = ttk.Label(stats, text="Сводка", style="CardTitle.TLabel")
@@ -143,15 +148,12 @@ class VisualizationPage:
         self.avg_label, self.avg_caption = self._stat(stats, "")
         self.low_label, self.low_caption = self._stat(stats, "")
 
-        ttk.Button(panel, text="Экспорт в PDF", cursor="hand2", style="MainButton.TButton",
-                   command=self.export_pdf).pack(fill="x")
-
     @staticmethod
     def _stat(parent, caption):
         value = ttk.Label(parent, text="—", style="Value.TLabel", font=(FONT_FAMILY, 16, "bold"))
         value.pack(anchor="w")
         cap = ttk.Label(parent, text=caption, style="CardHint.TLabel")
-        cap.pack(anchor="w", pady=(0, 6))
+        cap.pack(anchor="w", pady=(0, 4))
         return value, cap
 
     def _update_chart_buttons(self):
