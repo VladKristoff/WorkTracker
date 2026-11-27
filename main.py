@@ -1,22 +1,28 @@
 import tkinter as tk
 
 from app import AppWorkTracker
-from view.main_menu import MainMenu
-from view.excel_builder_page import ExcelBuilderPage
-from view.analytics.students_page import StudentsPage
-from view.analytics.visualization_page import VisualizationPage
-from view.analytics.control_page import ControlPage
+from view.pages.builder_page import ExcelBuilderPage
+from view.pages.charts_page import VisualizationPage
+from view.pages.controls_page import ControlPage
+from view.pages.overview_page import OverviewPage
+from view.pages.start_page import StartPage
+from view.pages.student_page import StudentPage
+from view.pages.students_page import StudentsPage
+
+PAGES = {
+    "main_menu": StartPage,
+    "overview_page": OverviewPage,
+    "students_page": StudentsPage,
+    "student_page": StudentPage,
+    "control_page": ControlPage,
+    "visualization_page": VisualizationPage,
+    "excel_builder_page": ExcelBuilderPage,
+}
 
 if __name__ == "__main__":
     root = tk.Tk()
     app = AppWorkTracker(root)
-
-    app.register_page("main_menu", MainMenu)
-    app.register_page("excel_builder_page", ExcelBuilderPage)
-    app.register_page("students_page", StudentsPage)
-    app.register_page("visualization_page", VisualizationPage)
-    app.register_page("control_page", ControlPage)
-
+    for name, page in PAGES.items():
+        app.register_page(name, page)
     app.show_window("main_menu")
-
     root.mainloop()
